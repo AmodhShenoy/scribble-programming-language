@@ -1,0 +1,17 @@
+<svg width="291" height="271" viewBox="0 0 291 271" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="repeat_loop_ender">
+<g id="repeat_loop_ender_2">
+<g id="loop_back_bottom">
+<path d="M230.5 194H205V160H205.322L230.5 194Z" fill="#F0B43B"/>
+<path d="M256 194H230.5L255.678 160H256V194Z" fill="#F0B43B"/>
+<path d="M171 194H291V219H171V194Z" fill="#F0B43B"/>
+<path d="M243 216H221V256H243V216Z" fill="#F0B43B"/>
+<path d="M14 249V271H243V249H14Z" fill="#F0B43B"/>
+</g>
+<g id="loop_back_arrow">
+<path id="loop_back_arrowbody" d="M36 271H14V27.1494H36V271Z" fill="#F0B43B"/>
+<path id="loop_back_arrowhead" d="M25.5477 1.14441e-05L51.0957 34.0601H0L25.5477 1.14441e-05Z" fill="#F0B43B"/>
+</g>
+</g>
+</g>
+</svg>
