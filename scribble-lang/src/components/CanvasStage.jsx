@@ -22,6 +22,17 @@ export default function CanvasStage() {
     // Explicit panning state
     const [isPanning, setIsPanning] = useState(false);
 
+    useEffect(() => {
+        const onKey = (e) => {
+            if (e.key === "Delete" || e.key === "Backspace") {
+                const { selectedId, deleteBlock } = useBlockStore.getState();
+                if (selectedId) deleteBlock(selectedId);
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
+
     // Keep size in sync with viewport (not with content)
     useEffect(() => {
         const onResize = () => {
