@@ -1,34 +1,113 @@
+// src/components/BlockPalette.jsx
 import React, { useRef } from "react";
 import { nanoid } from "nanoid";
 import { useBlockStore } from "../store/useBlockStore";
 
-const BLOCK_TYPES = [
-    "start",
-    "say",
-    "repeat_until",
-    "if_else",
-    "stop",
-    "go_to",
-    "change_x_by",
-    "turn_anticlockwise",
-    "plus_operator",
-    "and_operator",
-    "et_operator",
-    "set_variable",
-    "change_variable",
-    "variable",
+// Serve SVGs from /public/blocks/*.svg
+const ASSET_BASE = "/blocks";
+
+// Grouped palette (edit or reorder as you like)
+const CATEGORIES = [
+    {
+        title: "Control",
+        types: [
+            "start",
+            "stop",
+            "wait",
+            "repeat_times",
+            "repeat_until",
+            "if_else",
+            "if_branch_ender",
+            "repeat_loop_ender",
+        ],
+    },
+    {
+        title: "Motion",
+        types: [
+            "move",
+            "go_to",
+            "change_x_by",
+            "change_y_by",
+            "turn_clockwise",
+            "turn_anticlockwise",
+            "point_in",
+        ],
+    },
+    {
+        title: "Looks",
+        types: ["say", "think", "clear"],
+    },
+    {
+        title: "Variables",
+        types: ["set_variable", "change_variable", "variable"],
+    },
+    {
+        title: "Operators",
+        types: [
+            "plus_operator",
+            "minus_operator",
+            "multiply_operator",
+            "divide_operator",
+            "mod_operator",
+            "gt_operator",
+            "lt_operator",
+            "et_operator",
+            "and_operator",
+            "or_operator",
+            "not_operator",
+        ],
+    },
 ];
+
+// Optional pretty label (used under thumbnails)
+const PRETTY = {
+    start: "start",
+    stop: "stop",
+    wait: "wait",
+    repeat_times: "repeat (times)",
+    repeat_until: "repeat until",
+    if_else: "if / else",
+    if_branch_ender: "if ender",
+    repeat_loop_ender: "loop ender",
+
+    move: "move",
+    go_to: "go to",
+    change_x_by: "change x by",
+    change_y_by: "change y by",
+    turn_clockwise: "turn ↻",
+    turn_anticlockwise: "turn ↺",
+    point_in: "point in",
+
+    say: "say",
+    think: "think",
+    clear: "clear",
+
+    set_variable: "set variable",
+    change_variable: "change variable",
+    variable: "variable",
+
+    plus_operator: "a + b",
+    minus_operator: "a − b",
+    multiply_operator: "a × b",
+    divide_operator: "a ÷ b",
+    mod_operator: "a mod b",
+    gt_operator: "a > b",
+    lt_operator: "a < b",
+    et_operator: "a = b",
+    and_operator: "a AND b",
+    or_operator: "a OR b",
+    not_operator: "NOT a",
+};
 
 function BlockThumbnail({ type, onClick }) {
     return (
         <div
             onClick={onClick}
-            onKeyDown={(e) => (e.key === "Enter" ? onClick() : null)}
+            title={type}
             role="button"
             tabIndex={0}
-            title={type}
+            onKeyDown={(e) => (e.key === "Enter" ? onClick() : null)}
             style={{
-                marginBottom: 12,
                 cursor: "pointer",
                 padding: 6,
                 border: "1px solid #ddd",
@@ -38,9 +117,8 @@ function BlockThumbnail({ type, onClick }) {
                 userSelect: "none",
             }}
         >
-            {/* Read from public/blocks/NAME.svg */}
             <img
-                src={`/blocks/${type}.svg`}
+                src={`${ASSET_BASE}/${type}.svg`}
                 alt={type}
                 style={{
                     maxWidth: 160,
@@ -48,11 +126,43 @@ function BlockThumbnail({ type, onClick }) {
                     height: "auto",
                     display: "block",
                     margin: "0 auto",
-                    pointerEvents: "none", // ensure the DIV gets the click
+                    pointerEvents: "none", // ensure wrapper receives click
                 }}
-                onError={() => console.warn(`Missing /blocks/${type}.svg`)}
+                onError={() => console.warn(`Missing ${ASSET_BASE}/${type}.svg`)}
             />
-            <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>{type}</div>
+            <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
+                {PRETTY[type] || type}
+            </div>
+        </div>
+    );
+}
+
+function Category({ title, types, onAdd }) {
+    return (
+        <div style={{ marginBottom: 16 }}>
+            <div
+                style={{
+                    fontWeight: 600,
+                    fontSize: 13,
+                    color: "#444",
+                    margin: "6px 0 8px",
+                    textTransform: "uppercase",
+                    letterSpacing: 0.4,
+                }}
+            >
+                {title}
+            </div>
+            <div
+                style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr",
+                    gap: 12,
+                }}
+            >
+                {types.map((t) => (
+                    <BlockThumbnail key={t} type={t} onClick={() => onAdd(t)} />
+                ))}
+            </div>
         </div>
     );
 }
@@ -62,18 +172,17 @@ export default function BlockPalette() {
     const spawnCountRef = useRef(0);
 
     const handleAdd = (type) => {
+        // Spawn in a visible region with a small offset each time
         const i = spawnCountRef.current++;
-        const base = { x: 260, y: 180 };         // visible zone on canvas
+        const base = { x: 260, y: 180 };
         const jitter = { x: (i % 5) * 28, y: Math.floor(i / 5) * 28 };
 
-        const block = {
+        addBlock({
             id: nanoid(),
             type,
             x: base.x + jitter.x,
             y: base.y + jitter.y,
-        };
-        console.log("[palette click]", type, block);
-        addBlock(block);
+        });
     };
 
     return (
@@ -89,19 +198,15 @@ export default function BlockPalette() {
             }}
         >
             <h3 style={{ margin: "0 0 12px" }}>Blocks</h3>
-            {BLOCK_TYPES.map((type) => (
-                <BlockThumbnail key={type} type={type} onClick={() => handleAdd(type)} />
-            ))}
 
-            {/* Debug helpers */}
-            <button
-                style={{ marginTop: 16, width: "100%" }}
-                onClick={() =>
-                    addBlock({ id: nanoid(), type: "say", x: 260, y: 180 })
-                }
-            >
-                + Add test block
-            </button>
+            {CATEGORIES.map((cat) => (
+                <Category
+                    key={cat.title}
+                    title={cat.title}
+                    types={cat.types}
+                    onAdd={handleAdd}
+                />
+            ))}
         </div>
     );
 }
