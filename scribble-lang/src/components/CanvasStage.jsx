@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Stage, Layer } from "react-konva";
 import { useBlockStore } from "../store/useBlockStore";
 import Block from "./Block";
+import { getAssetUrl } from "../bootstrap/loadSvgInfo";
 
 const PALETTE_WIDTH = 220;
 
@@ -17,11 +18,15 @@ export default function CanvasStage() {
 
     const [scale, setScale] = useState(1);
     const [pos, setPos] = useState({ x: 0, y: 0 });
-    const [dragging, setDragging] = useState(false);
 
-    // ✅ Restore delete/backspace to remove selected block
+    const [isPanning, setIsPanning] = useState(false);       // Hold Space or MMB
+    const [draggingStage, setDraggingStage] = useState(false);
+    const [draggingBlock, setDraggingBlock] = useState(false); // <- NEW
+
+    // Delete / Esc
     useEffect(() => {
         const onKeyDown = (e) => {
+            if (e.key === " ") setIsPanning(true); // Space to pan
             if (e.key === "Delete" || e.key === "Backspace") {
                 const { selectedId, deleteBlock } = useBlockStore.getState();
                 if (selectedId) {
@@ -34,24 +39,33 @@ export default function CanvasStage() {
                 clearSelection();
             }
         };
+        const onKeyUp = (e) => {
+            if (e.key === " ") setIsPanning(false);
+        };
         window.addEventListener("keydown", onKeyDown);
-        return () => window.removeEventListener("keydown", onKeyDown);
+        window.addEventListener("keyup", onKeyUp);
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            window.removeEventListener("keyup", onKeyUp);
+        };
     }, []);
 
+    // Resize
     useEffect(() => {
-        const onResize = () => {
+        const onResize = () =>
             setDims({
                 width: Math.max(1, window.innerWidth - PALETTE_WIDTH),
                 height: Math.max(1, window.innerHeight),
             });
-        };
         window.addEventListener("resize", onResize);
         return () => window.removeEventListener("resize", onResize);
     }, []);
 
-    // Wheel/trackpad: Ctrl/Cmd + wheel zooms; otherwise pans
+    // Wheel: zoom with Ctrl/Cmd; pan with deltas — but DO NOT pan while dragging a block
     const handleWheel = (e) => {
         e.evt.preventDefault();
+        if (draggingBlock) return; // <- prevent canvas from moving during block drag
+
         const stage = stageRef.current;
         if (!stage) return;
 
@@ -79,7 +93,15 @@ export default function CanvasStage() {
         setPos((p) => ({ x: p.x - e.evt.deltaX * k, y: p.y - e.evt.deltaY * k }));
     };
 
-    // ✅ Click empty canvas to clear selection (optional but nice)
+    // Allow Middle-mouse to pan
+    const handleMouseDown = (e) => {
+        if (e.evt.button === 1) setIsPanning(true);
+    };
+    const handleMouseUp = (e) => {
+        if (e.evt.button === 1) setIsPanning(false);
+    };
+
+    // Click empty canvas to clear selection
     const handleStageMouseDown = (e) => {
         const clickedOnEmpty = e.target === e.target.getStage();
         if (clickedOnEmpty) {
@@ -96,30 +118,53 @@ export default function CanvasStage() {
                 height: "100vh",
                 background: "#1f1f1f",
                 overflow: "hidden",
-                cursor: dragging ? "grabbing" : "grab",
+                cursor:
+                    isPanning && !draggingBlock
+                        ? draggingStage
+                            ? "grabbing"
+                            : "grab"
+                        : "default",
             }}
         >
             <Stage
                 ref={stageRef}
                 width={dims.width}
                 height={dims.height}
-                draggable
-                onDragStart={() => setDragging(true)}
-                onDragEnd={(e) => {
-                    setDragging(false);
+                draggable={isPanning && !draggingBlock}   // <- Stage only drags when panning & not dragging a block
+                onDragStart={(e) => {
+                    if (!(isPanning && !draggingBlock)) return;
+                    setDraggingStage(true);
+                }}
+                onDragMove={(e) => {
+                    if (!draggingStage) return;            // <- gate updates
                     setPos(e.target.position());
                 }}
-                onDragMove={(e) => setPos(e.target.position())}
+                onDragEnd={(e) => {
+                    if (!draggingStage) return;
+                    setDraggingStage(false);
+                    setPos(e.target.position());
+                }}
                 scaleX={scale}
                 scaleY={scale}
                 x={pos.x}
                 y={pos.y}
                 onWheel={handleWheel}
-                onMouseDown={handleStageMouseDown}
+                onMouseDown={handleMouseDown}
+                onMouseUp={handleMouseUp}
+                onMouseDownCapture={handleStageMouseDown}
             >
                 <Layer>
                     {blocks.map((b) => (
-                        <Block key={b.id} {...b} />
+                        <Block
+                            key={b.id}
+                            {...b}
+                            assetUrl={getAssetUrl(b.type)}
+                            stageRef={stageRef}
+                            stageScale={scale}
+                            // Notify canvas when a block drag starts/ends
+                            onBlockDragStart={() => setDraggingBlock(true)}
+                            onBlockDragEnd={() => setDraggingBlock(false)}
+                        />
                     ))}
                 </Layer>
             </Stage>
