@@ -2,25 +2,30 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+/**
+ * Edge shapes:
+ *  - { kind: "stack",  from, to }
+ *  - { kind: "branch", from, to, meta:{ branch: "true"|"false"|"body" } }
+ *  - { kind: "input",  from, to, meta:{ port: "<slotName>" } }
+ *
+ * Block shape:
+ *  - { id, type, x, y, w, h, inputs?: { [port]: string } }
+ */
+
 export const useBlockStore = create(
     persist(
         (set, get) => ({
+            // ---------------- state ----------------
             blocks: [],
-            edges: [], // { kind:'stack'|'branch', from, to, meta?:{branch} }
+            edges: [],
             selectedId: null,
+            svgInfoByType: {}, // parsed anchors, inputs, viewBox per block type
 
-            // parsed SVG metadata per block type (anchors, tipHeight, etc.)
-            svgInfoByType: {},
-
-            // ---------- blocks ----------
+            // --------------- blocks ----------------
             addBlock: (b) =>
                 set((s) => ({
-                    blocks: [...s.blocks, { ...b, w: b.w ?? 160, h: b.h ?? 64 }],
-                })),
-
-            updateBlock: (id, updates) =>
-                set((s) => ({
-                    blocks: s.blocks.map((b) => (b.id === id ? { ...b, ...updates } : b)),
+                    // do NOT force default w/h; Block registers its natural SVG size
+                    blocks: [...s.blocks, { ...b, inputs: b.inputs ?? {} }],
                 })),
 
             moveBlock: (id, x, y) =>
@@ -28,7 +33,12 @@ export const useBlockStore = create(
                     blocks: s.blocks.map((b) => (b.id === id ? { ...b, x, y } : b)),
                 })),
 
-            // Only write to state if w/h actually changed
+            updateBlock: (id, updates) =>
+                set((s) => ({
+                    blocks: s.blocks.map((b) => (b.id === id ? { ...b, ...updates } : b)),
+                })),
+
+            // only write if changed (prevents churn)
             registerSize: (id, w, h) =>
                 set((s) => {
                     const idx = s.blocks.findIndex((b) => b.id === id);
@@ -43,16 +53,16 @@ export const useBlockStore = create(
             selectBlock: (id) => set({ selectedId: id }),
             clearSelection: () => set({ selectedId: null }),
 
-            // ---------- svg info ----------
+            // ------------- svg info cache ----------
             setSvgInfo: (type, info) =>
                 set((s) => ({ svgInfoByType: { ...s.svgInfoByType, [type]: info } })),
             setManySvgInfo: (map) =>
                 set((s) => ({ svgInfoByType: { ...s.svgInfoByType, ...map } })),
 
-            // ---------- connections (your original API) ----------
+            // -------------- connections ------------
             connectStack: (aboveId, belowId) => {
                 const { edges } = get();
-                // ensure only one vertical neighbor
+                // Only one outgoing "next" from a block and only one incoming "prev" to a block
                 const pruned = edges.filter(
                     (e) => !(e.kind === "stack" && (e.from === aboveId || e.to === belowId))
                 );
@@ -62,7 +72,7 @@ export const useBlockStore = create(
 
             connectBranch: (parentId, branch, childId) => {
                 const { edges } = get();
-                // unique per (parent, branch)
+                // One child per (parent,branch)
                 const pruned = edges.filter(
                     (e) => !(e.kind === "branch" && e.from === parentId && e.meta?.branch === branch)
                 );
@@ -70,52 +80,86 @@ export const useBlockStore = create(
                 set({ edges: pruned });
             },
 
+            // plug a block into a named input slot (clears typed value)
+            connectInput: (parentId, port, childId) => {
+                const { edges, blocks } = get();
+                const pruned = edges.filter(
+                    (e) => !(e.kind === "input" && e.from === parentId && e.meta?.port === port)
+                );
+                pruned.push({ kind: "input", from: parentId, to: childId, meta: { port } });
+
+                const nextBlocks = blocks.map((b) =>
+                    b.id === parentId ? { ...b, inputs: { ...(b.inputs || {}), [port]: "" } } : b
+                );
+                set({ edges: pruned, blocks: nextBlocks });
+            },
+
+            // set a literal value for an input slot (removes any block connected there)
+            setInputValue: (blockId, port, value) =>
+                set((s) => {
+                    const edges = s.edges.filter(
+                        (e) => !(e.kind === "input" && e.from === blockId && e.meta?.port === port)
+                    );
+                    const blocks = s.blocks.map((b) =>
+                        b.id === blockId
+                            ? { ...b, inputs: { ...(b.inputs || {}), [port]: value } }
+                            : b
+                    );
+                    return { edges, blocks };
+                }),
+
             disconnectAllFor: (id) =>
                 set((s) => ({ edges: s.edges.filter((e) => e.from !== id && e.to !== id) })),
 
             deleteBlock: (id) => {
                 const { blocks, edges, selectedId } = get();
+
+                // re-link stack neighbors if present
                 const above = edges.find((e) => e.kind === "stack" && e.to === id)?.from || null;
                 const below = edges.find((e) => e.kind === "stack" && e.from === id)?.to || null;
 
                 const nb = blocks.filter((b) => b.id !== id);
                 let ne = edges.filter((e) => e.from !== id && e.to !== id);
 
-                // if deleting a middle stack element, reconnect above ↕ below
                 if (above && below) {
+                    // ensure no duplicate stack link remains
                     ne = ne.filter(
                         (e) => !(e.kind === "stack" && (e.from === above || e.to === below))
                     );
                     ne.push({ kind: "stack", from: above, to: below });
                 }
 
-                set({ blocks: nb, edges: ne, selectedId: selectedId === id ? null : selectedId });
+                set({
+                    blocks: nb,
+                    edges: ne,
+                    selectedId: selectedId === id ? null : selectedId,
+                });
             },
 
-            // ---------- generic connections for snapper ----------
-            // Map (fromPort) to your edge model
-            connectByPorts: (fromId, fromPort, toId /* toPort always 'prev' */) => {
-                if (fromPort === "next") {
+            // ------------- helpers used by UI/snapper -------------
+            // Generic connector that dispatches to correct edge type
+            connectEdge: ({ fromId, fromPort, toId }) => {
+                if (String(fromPort || "").startsWith("input:")) {
+                    const port = String(fromPort).split(":")[1];
+                    get().connectInput(fromId, port, toId);
+                } else if (fromPort === "next") {
                     get().connectStack(fromId, toId);
-                    return;
+                } else {
+                    // "true" | "false" | "body" etc
+                    get().connectBranch(fromId, String(fromPort), toId);
                 }
-                // treat named ports as branches (body/true/false/left/right/…)
-                get().connectBranch(fromId, String(fromPort), toId);
             },
 
-            connectEdge: ({ fromId, fromPort, toId /*, toPort */ }) =>
-                get().connectByPorts(fromId, fromPort, toId),
-
-            // Optional: cycle check helper for snapper
+            // cycle detection across all edges
             wouldCreateCycle: (fromId, toId) => {
-                // DFS from 'toId' to see if we can reach 'fromId'
                 const { edges } = get();
                 const adj = new Map();
+
                 for (const e of edges) {
                     if (!adj.has(e.from)) adj.set(e.from, []);
                     adj.get(e.from).push(e.to);
                 }
-                // include the prospective edge
+                // include proposed edge
                 if (!adj.has(fromId)) adj.set(fromId, []);
                 adj.get(fromId).push(toId);
 
@@ -132,6 +176,9 @@ export const useBlockStore = create(
                 return false;
             },
         }),
-        { name: "scribble-blocks" }
+        {
+            // bump key so legacy 160x64 defaults don't come back from localStorage
+            name: "scribble-blocks-v2",
+        }
     )
 );

@@ -1,7 +1,5 @@
 // src/logic/svgInfoCache.js
-// Minimal parser: viewBox, anchors, tipHeight (arrow overlap).
-// Call ensureSvgInfo(type, url) once per block type at app start.
-
+// Caches: viewBox, anchors, tipHeight, inputs (per block type)
 const cache = new Map();
 
 function parseViewBox(svgEl) {
@@ -10,7 +8,6 @@ function parseViewBox(svgEl) {
         const [x, y, w, h] = vb.split(/\s+/).map(Number);
         return { x, y, w, h };
     }
-    // fallback to width/height if no viewBox
     return {
         x: 0,
         y: 0,
@@ -19,65 +16,105 @@ function parseViewBox(svgEl) {
     };
 }
 
-function getBBoxInDoc(node, svgForBBox) {
-    // Must be in a live <svg> to use getBBox()
+function mountForBBox(templateSvgEl, node) {
+    // need a live <svg> to call getBBox
+    const tmpSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    tmpSvg.setAttribute(
+        "viewBox",
+        templateSvgEl.getAttribute("viewBox") ||
+        `0 0 ${templateSvgEl.getAttribute("width") || 0} ${templateSvgEl.getAttribute("height") || 0}`
+    );
+    tmpSvg.style.position = "absolute";
+    tmpSvg.style.left = "-10000px";
+    tmpSvg.style.top = "-10000px";
+    document.body.appendChild(tmpSvg);
     const clone = node.cloneNode(true);
-    svgForBBox.appendChild(clone);
-    const b = clone.getBBox();
-    svgForBBox.removeChild(clone);
-    return b;
+    tmpSvg.appendChild(clone);
+    const bbox = clone.getBBox();
+    tmpSvg.remove();
+    return bbox;
 }
 
-function parseAnchorsAndTip(doc) {
+function parseAnchorsInputsTip(doc) {
     const svg = doc.querySelector("svg");
     const viewBox = parseViewBox(svg);
 
+    // anchors
     const anchors = {};
-    // Any element id starting with "anchor:"
-    doc.querySelectorAll("[id^='anchor:']").forEach(el => {
-        const id = el.id; // e.g., "anchor:next"
-        const name = id.split(":")[1]; // next | prev | body | true | false | ...
+    doc.querySelectorAll("[id^='anchor:']").forEach((el) => {
+        const name = el.id.split(":")[1];
+        let x = 0,
+            y = 0;
         const tag = el.tagName.toLowerCase();
-        let x = 0, y = 0;
-
         if (tag === "circle" || tag === "ellipse") {
             x = Number(el.getAttribute("cx") || 0);
             y = Number(el.getAttribute("cy") || 0);
         } else if (tag === "rect") {
-            // use rect center if someone used rect anchors
             const rx = Number(el.getAttribute("x") || 0);
             const ry = Number(el.getAttribute("y") || 0);
             const rw = Number(el.getAttribute("width") || 0);
             const rh = Number(el.getAttribute("height") || 0);
-            x = rx + rw / 2; y = ry + rh / 2;
+            x = rx + rw / 2;
+            y = ry + rh / 2;
         } else {
-            // fallback to getBBox center
-            const tmpSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-            tmpSvg.setAttribute("viewBox", svg.getAttribute("viewBox") || `0 0 ${viewBox.w} ${viewBox.h}`);
-            tmpSvg.style.position = "absolute"; tmpSvg.style.left = "-10000px"; tmpSvg.style.top = "-10000px";
-            document.body.appendChild(tmpSvg);
-            const b = getBBoxInDoc(el, tmpSvg);
-            document.body.removeChild(tmpSvg);
-            x = b.x + b.width / 2; y = b.y + b.height / 2;
+            const b = mountForBBox(svg, el);
+            x = b.x + b.width / 2;
+            y = b.y + b.height / 2;
         }
-
         anchors[name] = { x, y };
     });
 
-    // tipHeight = bbox height of #arrowHead > #tip
+    // tip height (#arrowHead > #tip)
     let tipHeight = 0;
     const tip = doc.querySelector("#arrowHead #tip");
     if (tip) {
-        const tmpSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        tmpSvg.setAttribute("viewBox", svg.getAttribute("viewBox") || `0 0 ${viewBox.w} ${viewBox.h}`);
-        tmpSvg.style.position = "absolute"; tmpSvg.style.left = "-10000px"; tmpSvg.style.top = "-10000px";
-        document.body.appendChild(tmpSvg);
-        const b = getBBoxInDoc(tip, tmpSvg);
-        document.body.removeChild(tmpSvg);
-        tipHeight = b.height || 0; // e.g., 34
+        const b = mountForBBox(svg, tip);
+        tipHeight = b.height || 0;
     }
 
-    return { viewBox, anchors, tipHeight };
+    // inputs: <g id="input:<name>"> with a child <rect id="box"> (opacity 0–1)
+    // optional anchors inside the group:
+    //   <circle id="anchor-input:<name>-left"> / "-right">
+    const inputs = {};
+    doc.querySelectorAll("g[id^='input:']").forEach((g) => {
+        const name = g.id.split(":")[1];
+        const box = g.querySelector("#box, rect#box");
+        if (!box) return;
+        const x = Number(box.getAttribute("x") || 0);
+        const y = Number(box.getAttribute("y") || 0);
+        const w = Number(box.getAttribute("width") || 0);
+        const h = Number(box.getAttribute("height") || 0);
+        const rx = Number(box.getAttribute("rx") || 0);
+
+        const leftEl = g.querySelector(`[id="anchor-input:${name}-left"]`);
+        const rightEl = g.querySelector(`[id="anchor-input:${name}-right"]`);
+        const toPt = (el) => {
+            if (!el) return null;
+            const tag = el.tagName.toLowerCase();
+            if (tag === "circle") {
+                return { x: Number(el.getAttribute("cx") || 0), y: Number(el.getAttribute("cy") || 0) };
+            }
+            if (tag === "rect") {
+                const rx = Number(el.getAttribute("x") || 0);
+                const ry = Number(el.getAttribute("y") || 0);
+                const rw = Number(el.getAttribute("width") || 0);
+                const rh = Number(el.getAttribute("height") || 0);
+                return { x: rx + rw / 2, y: ry + rh / 2 };
+            }
+            const b = mountForBBox(svg, el);
+            return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+        };
+
+        inputs[name] = {
+            box: { x, y, w, h, rx },
+            anchors: {
+                left: leftEl ? toPt(leftEl) : { x, y: y + h / 2 },
+                right: rightEl ? toPt(rightEl) : { x: x + w, y: y + h / 2 },
+            },
+        };
+    });
+
+    return { viewBox, anchors, tipHeight, inputs };
 }
 
 export async function ensureSvgInfo(type, url, setSvgInfo) {
@@ -85,14 +122,12 @@ export async function ensureSvgInfo(type, url, setSvgInfo) {
     const res = await fetch(url);
     const text = await res.text();
     const doc = new DOMParser().parseFromString(text, "image/svg+xml");
-    const info = parseAnchorsAndTip(doc);
+    const info = parseAnchorsInputsTip(doc);
     cache.set(type, info);
-    // Optionally push into store
     if (typeof setSvgInfo === "function") setSvgInfo(type, info);
     return info;
 }
 
-// Expose cache for testing
 export function getSvgInfo(type) {
     return cache.get(type) || null;
 }

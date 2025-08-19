@@ -1,3 +1,4 @@
+// src/components/CanvasStage.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { Stage, Layer } from "react-konva";
 import { useBlockStore } from "../store/useBlockStore";
@@ -22,13 +23,16 @@ export default function CanvasStage() {
     const [draggingStage, setDraggingStage] = useState(false);
     const [draggingBlock, setDraggingBlock] = useState(false);
 
-    // simple context menu state
-    const [ctx, setCtx] = useState(null); // {x,y, id}
+    // context menu (right-click)
+    const [ctx, setCtx] = useState(null); // {x,y,id}
 
-    // keyboard: Delete/Backspace, Esc; Space = pan
+    // inline input editor overlay
+    const [inputUI, setInputUI] = useState(null); // {blockId,port,worldRect{ x,y,w,h,rx },value}
+
+    // keyboard handlers
     useEffect(() => {
         const onKeyDown = (e) => {
-            if (e.key === " ") setIsPanning(true);
+            if (e.key === " ") setIsPanning(true); // Space to pan
             if (e.key === "Delete" || e.key === "Backspace") {
                 const { selectedId, deleteBlock } = useBlockStore.getState();
                 if (selectedId) {
@@ -41,6 +45,7 @@ export default function CanvasStage() {
                 const { clearSelection } = useBlockStore.getState();
                 clearSelection();
                 setCtx(null);
+                setInputUI(null);
             }
         };
         const onKeyUp = (e) => {
@@ -65,7 +70,7 @@ export default function CanvasStage() {
         return () => window.removeEventListener("resize", onResize);
     }, []);
 
-    // wheel: zoom/pan; no pan while dragging block
+    // wheel: zoom (Ctrl/Cmd) or pan; disable while dragging a block
     const handleWheel = (e) => {
         e.evt.preventDefault();
         if (draggingBlock) return;
@@ -92,26 +97,48 @@ export default function CanvasStage() {
             return;
         }
 
+        // pan with deltas
         setPos((p) => ({ x: p.x - e.evt.deltaX, y: p.y - e.evt.deltaY }));
     };
 
-    // middle mouse pan
+    // middle mouse pans; click hides context menu
     const handleMouseDown = (e) => {
         if (e.evt.button === 1) setIsPanning(true);
-        // clicking anywhere hides context menu
         setCtx(null);
+        setInputUI(null);
     };
     const handleMouseUp = (e) => {
         if (e.evt.button === 1) setIsPanning(false);
     };
 
+    // clear selection when clicking empty canvas
     const handleStageMouseDown = (e) => {
         const clickedOnEmpty = e.target === e.target.getStage();
         if (clickedOnEmpty) {
             const { clearSelection } = useBlockStore.getState();
             clearSelection();
             setCtx(null);
+            setInputUI(null);
         }
+    };
+
+    // world → screen for input overlay
+    const worldToScreen = (x, y, w = 0, h = 0) => {
+        const stage = stageRef.current;
+        const s = stage ? stage.scaleX() : 1;
+        const sx = (stage ? stage.x() : 0) + x * s;
+        const sy = (stage ? stage.y() : 0) + y * s;
+        return { left: sx, top: sy, width: w * s, height: h * s };
+    };
+
+    const startEditInput = ({ blockId, port, worldRect, value }) => {
+        setInputUI({ blockId, port, worldRect, value });
+    };
+
+    const commitInput = (val) => {
+        if (!inputUI) return;
+        useBlockStore.getState().setInputValue(inputUI.blockId, inputUI.port, val ?? "");
+        setInputUI(null);
     };
 
     const deleteFromContext = () => {
@@ -179,12 +206,57 @@ export default function CanvasStage() {
                             onBlockDragStart={() => setDraggingBlock(true)}
                             onBlockDragEnd={() => setDraggingBlock(false)}
                             onShowContextMenu={(pt, id) => setCtx({ ...pt, id })}
+                            onRequestEditInput={startEditInput}
                         />
                     ))}
                 </Layer>
             </Stage>
 
-            {/* Simple context menu */}
+            {/* Inline input overlay — replace this whole block */}
+            {inputUI && (() => {
+                const s = stageRef.current?.scaleX() || 1;
+                const { left, top, width, height } = worldToScreen(
+                    inputUI.worldRect.x,
+                    inputUI.worldRect.y,
+                    inputUI.worldRect.w,
+                    inputUI.worldRect.h
+                );
+                const radius = Math.max(4, (inputUI.worldRect.rx || 8) * s);
+
+                return (
+                    <input
+                        autoFocus
+                        defaultValue={inputUI.value || ""}
+                        onBlur={(e) => commitInput(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") commitInput(e.currentTarget.value);
+                            if (e.key === "Escape") setInputUI(null);
+                            e.stopPropagation();
+                        }}
+                        style={{
+                            position: "absolute",
+                            left,
+                            top,
+                            width,
+                            height,
+                            // make the element's outer box equal to the slot rect
+                            boxSizing: "border-box",
+                            border: "2px solid #6ad3ff",
+                            borderRadius: radius,
+                            padding: "0 10px",
+                            // keep text vertically centered without changing outer size
+                            lineHeight: `${Math.max(1, height - 4)}px`, // 4px = 2px top + 2px bottom border
+                            background: "#ffffff",
+                            color: "#111",
+                            outline: "none",
+                            boxShadow: "none",
+                            zIndex: 1000,
+                        }}
+                    />
+                );
+            })()}
+
+            {/* Context menu */}
             {ctx && (
                 <div
                     style={{
@@ -198,13 +270,10 @@ export default function CanvasStage() {
                         boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
                         padding: 6,
                         zIndex: 1000,
-                        minWidth: 140,
+                        minWidth: 160,
                     }}
                 >
-                    <div
-                        style={{ padding: "6px 10px", cursor: "pointer" }}
-                        onClick={deleteFromContext}
-                    >
+                    <div style={{ padding: "6px 10px", cursor: "pointer" }} onClick={deleteFromContext}>
                         🗑️ Delete (Del)
                     </div>
                     <div
