@@ -3,6 +3,7 @@ import React from "react";
 import BlockPalette from "./components/BlockPalette";
 import CanvasStage from "./components/CanvasStage";
 import { preloadSvgInfo } from "./bootstrap/loadSvgInfo";
+import DebugDock from "./components/DebugDock";
 
 export default function App() {
   // Prevent duplicate preload in Strict Mode / HMR
@@ -42,6 +43,10 @@ export default function App() {
       <main style={{ position: "relative", overflow: "hidden" }}>
         <CanvasStage />
       </main>
+      <>
+        {/* ...your palette + canvas... */}
+        <DebugDock />
+      </>
     </div>
   );
 }
