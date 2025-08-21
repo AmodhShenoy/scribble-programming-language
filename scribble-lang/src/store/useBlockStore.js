@@ -12,6 +12,14 @@ import { persist } from "zustand/middleware";
  *  - { id, type, x, y, w, h, inputs?: { [port]: string } }
  */
 
+function uid(prefix = "") {
+    return (
+        prefix +
+        Math.random().toString(36).slice(2, 8) +
+        Math.random().toString(36).slice(2, 6)
+    );
+}
+
 export const useBlockStore = create(
     persist(
         (set, get) => ({
@@ -20,6 +28,29 @@ export const useBlockStore = create(
             edges: [],
             selectedId: null,
             svgInfoByType: {}, // parsed anchors, inputs, viewBox per block type
+
+            // Variables registry for palette (not the interpreter runtime state)
+            // Shape: [{ id, name, initialValue }]
+            variables: [],
+
+            // --------------- variables --------------
+            createVariable: (name, initialValue = 0) =>
+                set((s) => {
+                    const clean = (name ?? "").trim();
+                    if (!clean) return {};
+                    // ensure unique display name
+                    let finalName = clean;
+                    let n = 2;
+                    const taken = new Set(s.variables.map((v) => v.name));
+                    while (taken.has(finalName)) {
+                        finalName = `${clean} (${n++})`;
+                    }
+                    const v = { id: uid("var_"), name: finalName, initialValue };
+                    return { variables: [...s.variables, v] };
+                }),
+
+            deleteVariable: (id) =>
+                set((s) => ({ variables: s.variables.filter((v) => v.id !== id) })),
 
             // --------------- blocks ----------------
             addBlock: (b) =>
@@ -74,7 +105,12 @@ export const useBlockStore = create(
                 const { edges } = get();
                 // One child per (parent,branch)
                 const pruned = edges.filter(
-                    (e) => !(e.kind === "branch" && e.from === parentId && e.meta?.branch === branch)
+                    (e) =>
+                        !(
+                            e.kind === "branch" &&
+                            e.from === parentId &&
+                            e.meta?.branch === branch
+                        )
                 );
                 pruned.push({ kind: "branch", from: parentId, to: childId, meta: { branch } });
                 set({ edges: pruned });
@@ -177,7 +213,6 @@ export const useBlockStore = create(
             },
         }),
         {
-            // bump key so legacy 160x64 defaults don't come back from localStorage
             name: "scribble-blocks-v2",
         }
     )
