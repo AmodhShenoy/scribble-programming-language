@@ -1,94 +1,116 @@
 // src/logic/snapper.js
-const DEFAULT_DIR = {
-    prev: "up",
-    next: "down",
-    body: "down",
-    true: "right",
-    false: "down",
-    left: "left",
-    right: "right",
-};
+//
+// Find nearest snap target for the block that finished dragging.
+// - Stack snap:   our "prev" to other "next"
+// - Input snap:   our "input-left" to other's each slot's "left" anchor
+//
+// This uses the SVG metadata cached in svgInfoByType (anchors, inputs, viewBox).
 
-function toWorld(block, info, pt) {
-    const sx = (block.w ?? info.viewBox.w) / info.viewBox.w;
-    const sy = (block.h ?? info.viewBox.h) / info.viewBox.h;
-    return { x: block.x + pt.x * sx, y: block.y + pt.y * sy };
+const STACK_RADIUS_SCR = 24;   // px at 100% zoom
+const INPUT_RADIUS_SCR = 22;   // px at 100% zoom
+
+function dist(a, b) {
+    const dx = a.x - b.x, dy = a.y - b.y;
+    return Math.hypot(dx, dy);
 }
 
-function getWorldAnchors(block, info) {
-    const out = [];
-    // block-level anchors
-    for (const [name, a] of Object.entries(info.anchors || {})) {
-        const p = toWorld(block, info, a);
-        out.push({ name, x: p.x, y: p.y, dir: DEFAULT_DIR[name] || "down", overlap: info.tipHeight || 0, blockId: block.id });
-    }
-    // input anchors (left/right) surfaced as "input:<name>-left/right"
-    for (const [iname, i] of Object.entries(info.inputs || {})) {
-        if (i.anchors?.left) {
-            const p = toWorld(block, info, i.anchors.left);
-            out.push({ name: `input:${iname}`, side: "left", x: p.x, y: p.y, dir: "right", overlap: 0, blockId: block.id });
-        }
-        if (i.anchors?.right) {
-            const p = toWorld(block, info, i.anchors.right);
-            out.push({ name: `input:${iname}`, side: "right", x: p.x, y: p.y, dir: "left", overlap: 0, blockId: block.id });
-        }
-    }
-    return out;
+function viewBoxSize(info) {
+    const w = info?.viewBox?.w ?? 128;
+    const h = info?.viewBox?.h ?? 128;
+    return { w, h };
 }
 
-function allowedPair(sourceName, targetName) {
-    if (sourceName !== "prev") return false;
-    if (targetName === "next" || targetName === "body" || targetName === "true" || targetName === "false") return true;
-    if (String(targetName).startsWith("input:")) return true;
-    return false;
+// local (SVG coords) -> local group coords (screen px inside the block's Group)
+function localToBlock(b, info, pt) {
+    if (!pt) return null;
+    const { w: vbw, h: vbh } = viewBoxSize(info);
+    const sx = (b.w ?? vbw) / vbw;
+    const sy = (b.h ?? vbh) / vbh;
+    return { x: pt.x * sx, y: pt.y * sy };
 }
 
-export function findSnap(block, blocks, svgInfoByType, stageScale = 1, opts = {}) {
-    const tuck = opts.tuck ?? false;
+// local anchor to world coords
+function localToWorld(b, info, pt) {
+    const p = localToBlock(b, info, pt);
+    return p ? { x: b.x + p.x, y: b.y + p.y } : null;
+}
 
-    const infoSrc = svgInfoByType[block.type];
-    if (!infoSrc) return null;
+function getAnchor(info, name) {
+    return info?.anchors?.[name] || null;
+}
 
-    const srcPrev = getWorldAnchors(block, infoSrc).find((a) => a.name === "prev");
-    if (!srcPrev) return null;
+export function findSnap(me, blocks, svgInfoByType, stageScale = 1, opts = {}) {
+    const myInfo = svgInfoByType[me.type];
+    if (!myInfo) return null;
 
-    const radiusWorld = 24 / (stageScale || 1);
-    let best = null,
-        bestD = Infinity;
+    const candidates = [];
 
-    for (const other of blocks) {
-        if (other.id === block.id) continue;
-        const infoT = svgInfoByType[other.type];
-        if (!infoT) continue;
+    // ----- A) stack snap (our prev ↔︎ other next) -----
+    const myPrev = getAnchor(myInfo, "prev");
+    const myPrevW = localToWorld(me, myInfo, myPrev);
 
-        for (const t of getWorldAnchors(other, infoT)) {
-            if (!allowedPair("prev", t.name)) continue;
-            const d = Math.hypot(t.x - srcPrev.x, t.y - srcPrev.y);
-            if (d < bestD && d <= radiusWorld) {
-                best = { ...t };
-                bestD = d;
+    if (myPrevW) {
+        const rad = STACK_RADIUS_SCR / stageScale;
+
+        for (const other of blocks) {
+            if (other.id === me.id) continue;
+            const oInfo = svgInfoByType[other.type];
+            if (!oInfo) continue;
+
+            const oNext = getAnchor(oInfo, "next");
+            const oNextW = localToWorld(other, oInfo, oNext);
+            if (!oNextW) continue;
+
+            const d = dist(myPrevW, oNextW);
+            if (d <= rad) {
+                candidates.push({
+                    kind: "stack",
+                    d,
+                    dx: oNextW.x - myPrevW.x,
+                    dy: oNextW.y - myPrevW.y,
+                    target: { blockId: other.id, port: "next" },
+                });
             }
         }
     }
-    if (!best) return null;
 
-    let dx = best.x - srcPrev.x;
-    let dy = best.y - srcPrev.y;
+    // ----- B) input snap (our input-left ↔︎ other input-slot left) -----
+    // Child anchor on the block being dragged:
+    const myInputLeftL = getAnchor(myInfo, "input-left");   // shared name across input blocks
+    const myInputLeftW = localToWorld(me, myInfo, myInputLeftL);
 
-    if (tuck) {
-        const o = best.overlap || 0;
-        switch (best.dir) {
-            case "down": dy -= o; break;
-            case "up": dy += o; break;
-            case "right": dx -= o; break;
-            case "left": dx += o; break;
-            default: break;
+    if (myInputLeftW) {
+        const rad = INPUT_RADIUS_SCR / stageScale;
+
+        for (const parent of blocks) {
+            if (parent.id === me.id) continue;
+            const pInfo = svgInfoByType[parent.type];
+            const slots = pInfo?.inputs || {};
+            if (!slots || !Object.keys(slots).length) continue;
+
+            for (const [slotName, slot] of Object.entries(slots)) {
+                // slot.anchors.left was produced from id="anchor-input:<slot>-left"
+                const leftL = slot?.anchors?.left;
+                if (!leftL) continue;
+
+                const leftW = localToWorld(parent, pInfo, leftL);
+                if (!leftW) continue;
+
+                const d = dist(myInputLeftW, leftW);
+                if (d <= rad) {
+                    candidates.push({
+                        kind: "input",
+                        d,
+                        dx: leftW.x - myInputLeftW.x,
+                        dy: leftW.y - myInputLeftW.y,
+                        target: { blockId: parent.id, port: `input:${slotName}` },
+                    });
+                }
+            }
         }
     }
 
-    return {
-        dx, dy,
-        target: { blockId: best.blockId, port: best.name }, // 'next' | 'true' | 'false' | 'body' | 'input:<name>'
-        source: { blockId: block.id, port: "prev" },
-    };
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => a.d - b.d);
+    return candidates[0];
 }

@@ -1,133 +1,137 @@
 // src/logic/svgInfoCache.js
-// Caches: viewBox, anchors, tipHeight, inputs (per block type)
-const cache = new Map();
+// Caches per-type SVG metadata (viewBox, anchors, input slots, bodyStretch box)
 
-function parseViewBox(svgEl) {
-    const vb = svgEl.getAttribute("viewBox");
-    if (vb) {
-        const [x, y, w, h] = vb.split(/\s+/).map(Number);
-        return { x, y, w, h };
-    }
-    return {
-        x: 0,
-        y: 0,
-        w: Number(svgEl.getAttribute("width") || 0),
-        h: Number(svgEl.getAttribute("height") || 0),
-    };
+const cache = new Map(); // type -> info
+
+export function getSvgInfo(type) {
+    return cache.get(type) || null;
 }
 
-function mountForBBox(templateSvgEl, node) {
-    // need a live <svg> to call getBBox
-    const tmpSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    tmpSvg.setAttribute(
-        "viewBox",
-        templateSvgEl.getAttribute("viewBox") ||
-        `0 0 ${templateSvgEl.getAttribute("width") || 0} ${templateSvgEl.getAttribute("height") || 0}`
-    );
-    tmpSvg.style.position = "absolute";
-    tmpSvg.style.left = "-10000px";
-    tmpSvg.style.top = "-10000px";
-    document.body.appendChild(tmpSvg);
-    const clone = node.cloneNode(true);
-    tmpSvg.appendChild(clone);
-    const bbox = clone.getBBox();
-    tmpSvg.remove();
-    return bbox;
-}
-
-function parseAnchorsInputsTip(doc) {
-    const svg = doc.querySelector("svg");
-    const viewBox = parseViewBox(svg);
-
-    // anchors
-    const anchors = {};
-    doc.querySelectorAll("[id^='anchor:']").forEach((el) => {
-        const name = el.id.split(":")[1];
-        let x = 0,
-            y = 0;
-        const tag = el.tagName.toLowerCase();
-        if (tag === "circle" || tag === "ellipse") {
-            x = Number(el.getAttribute("cx") || 0);
-            y = Number(el.getAttribute("cy") || 0);
-        } else if (tag === "rect") {
-            const rx = Number(el.getAttribute("x") || 0);
-            const ry = Number(el.getAttribute("y") || 0);
-            const rw = Number(el.getAttribute("width") || 0);
-            const rh = Number(el.getAttribute("height") || 0);
-            x = rx + rw / 2;
-            y = ry + rh / 2;
-        } else {
-            const b = mountForBBox(svg, el);
-            x = b.x + b.width / 2;
-            y = b.y + b.height / 2;
-        }
-        anchors[name] = { x, y };
-    });
-
-    // tip height (#arrowHead > #tip)
-    let tipHeight = 0;
-    const tip = doc.querySelector("#arrowHead #tip");
-    if (tip) {
-        const b = mountForBBox(svg, tip);
-        tipHeight = b.height || 0;
-    }
-
-    // inputs: <g id="input:<name>"> with a child <rect id="box"> (opacity 0–1)
-    // optional anchors inside the group:
-    //   <circle id="anchor-input:<name>-left"> / "-right">
-    const inputs = {};
-    doc.querySelectorAll("g[id^='input:']").forEach((g) => {
-        const name = g.id.split(":")[1];
-        const box = g.querySelector("#box, rect#box");
-        if (!box) return;
-        const x = Number(box.getAttribute("x") || 0);
-        const y = Number(box.getAttribute("y") || 0);
-        const w = Number(box.getAttribute("width") || 0);
-        const h = Number(box.getAttribute("height") || 0);
-        const rx = Number(box.getAttribute("rx") || 0);
-
-        const leftEl = g.querySelector(`[id="anchor-input:${name}-left"]`);
-        const rightEl = g.querySelector(`[id="anchor-input:${name}-right"]`);
-        const toPt = (el) => {
-            if (!el) return null;
-            const tag = el.tagName.toLowerCase();
-            if (tag === "circle") {
-                return { x: Number(el.getAttribute("cx") || 0), y: Number(el.getAttribute("cy") || 0) };
-            }
-            if (tag === "rect") {
-                const rx = Number(el.getAttribute("x") || 0);
-                const ry = Number(el.getAttribute("y") || 0);
-                const rw = Number(el.getAttribute("width") || 0);
-                const rh = Number(el.getAttribute("height") || 0);
-                return { x: rx + rw / 2, y: ry + rh / 2 };
-            }
-            const b = mountForBBox(svg, el);
-            return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-        };
-
-        inputs[name] = {
-            box: { x, y, w, h, rx },
-            anchors: {
-                left: leftEl ? toPt(leftEl) : { x, y: y + h / 2 },
-                right: rightEl ? toPt(rightEl) : { x: x + w, y: y + h / 2 },
-            },
-        };
-    });
-
-    return { viewBox, anchors, tipHeight, inputs };
-}
-
+/**
+ * Load + parse once per type, then write into your Zustand store via setSvgInfo.
+ *   type: "think", "plus_operator", ...
+ *   url : "/blocks/think.svg" (served from public/)
+ */
 export async function ensureSvgInfo(type, url, setSvgInfo) {
     if (cache.has(type)) return cache.get(type);
-    const res = await fetch(url);
-    const text = await res.text();
-    const doc = new DOMParser().parseFromString(text, "image/svg+xml");
-    const info = parseAnchorsInputsTip(doc);
+    const resp = await fetch(url);
+    const svgText = await resp.text();
+    const info = parseSvgInfo(svgText);
     cache.set(type, info);
     if (typeof setSvgInfo === "function") setSvgInfo(type, info);
     return info;
 }
 
-export function getSvgInfo(type) {
-    return cache.get(type) || null;
+// --------------------- parsing -----------------------
+
+function parseSvgInfo(svgText) {
+    // Attach once to DOM so getBBox works for paths/groups
+    const holder = document.createElement("div");
+    holder.style.position = "absolute";
+    holder.style.left = "-100000px";
+    holder.style.top = "-100000px";
+    holder.innerHTML = svgText;
+    document.body.appendChild(holder);
+
+    const svg = holder.querySelector("svg");
+    const info = {
+        viewBox: readViewBox(svg),
+        anchors: {},         // e.g. { prev:{x,y}, next:{x,y} }
+        inputs: {},          // name -> { box:{x,y,w,h,rx}, anchors:{left:{x,y}, right:{x,y}} }
+        bodyStretch: null,   // { box:{x,y,w,h}, fill? }
+    };
+
+    // ---- bodyStretch bbox
+    const bodyEl = svg.querySelector("#bodyStretch");
+    if (bodyEl) {
+        const bb = bodyEl.getBBox();
+        info.bodyStretch = {
+            box: { x: bb.x, y: bb.y, w: bb.width, h: bb.height },
+            fill: bodyEl.getAttribute("fill") || undefined,
+        };
+    }
+
+    // ---- plain anchors: <circle id="anchor:prev" ...> / <rect id="anchor:next" ...>
+    svg.querySelectorAll("[id^='anchor:']").forEach((el) => {
+        const key = el.id.split(":")[1];
+        info.anchors[key] = readCenter(el);
+    });
+
+    // ---- input groups: <g id="input:value"> ... <rect id="box" .../>
+    svg.querySelectorAll("g[id^='input:']").forEach((g) => {
+        const name = g.id.split(":")[1];
+        if (!info.inputs[name]) info.inputs[name] = { box: null, anchors: {} };
+
+        // box: use rect's numeric attrs (works without getBBox); fallback to getBBox
+        let box = null;
+        const rect = g.querySelector("#box");
+        if (rect) {
+            const x = num(rect.getAttribute("x"));
+            const y = num(rect.getAttribute("y"));
+            const w = num(rect.getAttribute("width"));
+            const h = num(rect.getAttribute("height"));
+            const rx = rect.hasAttribute("rx") ? num(rect.getAttribute("rx")) : 0;
+            if (Number.isFinite(x + y + w + h)) {
+                box = { x, y, w, h, rx };
+            }
+        }
+        if (!box) {
+            const bb = g.getBBox();
+            box = { x: bb.x, y: bb.y, w: bb.width, h: bb.height, rx: 0 };
+        }
+        info.inputs[name].box = box;
+
+        // input anchors: circle ids "anchor-input:value-left/right"
+        const left = g.querySelector(`#anchor-input\\:${cssEscape(name)}-left`);
+        const right = g.querySelector(`#anchor-input\\:${cssEscape(name)}-right`);
+        if (left) info.inputs[name].anchors.left = readCenter(left);
+        if (right) info.inputs[name].anchors.right = readCenter(right);
+    });
+
+    // detach
+    holder.remove();
+    return info;
+}
+
+// --------------------- helpers -----------------------
+
+function readViewBox(svg) {
+    if (!svg) return { x: 0, y: 0, w: 0, h: 0 };
+    const vb = svg.getAttribute("viewBox");
+    if (vb) {
+        const [x, y, w, h] = vb.split(/\s+|,/).map((n) => Number(n));
+        return { x, y, w, h };
+    }
+    // fallback: width/height attrs
+    const w = num(svg.getAttribute("width"));
+    const h = num(svg.getAttribute("height"));
+    return { x: 0, y: 0, w: Number.isFinite(w) ? w : 0, h: Number.isFinite(h) ? h : 0 };
+}
+
+function readCenter(el) {
+    if (!el) return { x: 0, y: 0 };
+    if (el.tagName.toLowerCase() === "circle") {
+        return { x: num(el.getAttribute("cx")), y: num(el.getAttribute("cy")) };
+    }
+    // rect (x,y,width,height) → center
+    if (el.tagName.toLowerCase() === "rect") {
+        const x = num(el.getAttribute("x"));
+        const y = num(el.getAttribute("y"));
+        const w = num(el.getAttribute("width"));
+        const h = num(el.getAttribute("height"));
+        return { x: x + w / 2, y: y + h / 2 };
+    }
+    // generic fallback: getBBox center
+    const bb = el.getBBox();
+    return { x: bb.x + bb.width / 2, y: bb.y + bb.height / 2 };
+}
+
+function num(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : NaN;
+}
+
+// Escape ':' in querySelector
+function cssEscape(name) {
+    return String(name).replace(/([:\\[\\].#>+~*^$|()])/g, "\\$1");
 }
