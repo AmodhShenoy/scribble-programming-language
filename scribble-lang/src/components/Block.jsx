@@ -34,7 +34,6 @@ export default function Block(props) {
     const selectBlock = useBlockStore((s) => s.selectBlock);
     const selectedId = useBlockStore((s) => s.selectedId);
     const edges = useBlockStore((s) => s.edges);
-    const allBlocks = useBlockStore((s) => s.blocks);
     const svgInfoByType = useBlockStore((s) => s.svgInfoByType);
     const registerSize = useBlockStore((s) => s.registerSize);
     const setInputValue = useBlockStore((s) => s.setInputValue);
@@ -63,6 +62,7 @@ export default function Block(props) {
     const sx = width / vbw;
     const sy = height / vbh;
 
+    // 🔑 Only use inputs that the SVG actually exposes
     const slots = info?.inputs || {};
     const dropdowns = info?.dropdowns || {}; // optional (if your loader provides it)
 
@@ -82,18 +82,14 @@ export default function Block(props) {
     const isVarChanger = b.type === "change_variable";
     const wantsVarDropdown = (isVarSetter || isVarChanger);
 
-    // pick rect for the variable-name dropdown: prefer dropdowns.name, else inputs.name, else default
+    // rect for the variable-name dropdown: prefer dropdowns.name, else inputs.name, else default
     const nameSlotRect = React.useMemo(() => {
-        const src =
-            (dropdowns && dropdowns.name) ||
-            (slots && slots.name) ||
-            null;
+        const src = dropdowns?.name || slots?.name || null;
         if (src) return slotLocal(src);
-        // fallback default area
+        // fallback default area (only for dropdown UI, not for white input pills)
         return { x: width * 0.16, y: height * 0.34, w: width * 0.30, h: Math.max(26, height * 0.18), rx: 10 };
     }, [dropdowns, slots, sx, sy, width, height]);
 
-    // cleanly close dropdown if you start dragging
     const closeDropdown = () => setOpenDropdown(null);
 
     return (
@@ -123,7 +119,7 @@ export default function Block(props) {
             onDragMove={(e) => {
                 e.cancelBubble = true;
                 const p = e.target.position();
-                moveBlock(b.id, p.x, p.y); // only the block being moved updates
+                moveBlock(b.id, p.x, p.y);
             }}
             onDragEnd={(e) => {
                 e.cancelBubble = true;
@@ -140,16 +136,13 @@ export default function Block(props) {
 
                 const snap = findSnap(meNow, state.blocks, state.svgInfoByType, scale, { tuck: false });
                 if (snap) {
-                    // move into place
                     state.moveBlock(b.id, meNow.x + snap.dx, meNow.y + snap.dy);
 
-                    // connect, unless it would create a cycle
                     if (!state.wouldCreateCycle(snap.target.blockId, b.id)) {
                         if (String(snap.target.port).startsWith("input:")) {
                             const port = snap.target.port.split(":")[1];
                             state.connectInput(snap.target.blockId, port, b.id);
                         } else {
-                            // "next" | "true" | "false" | "body" …
                             state.connectEdge({
                                 fromId: snap.target.blockId,
                                 fromPort: snap.target.port,
@@ -162,14 +155,14 @@ export default function Block(props) {
                 props.onBlockDragEnd?.();
             }}
         >
-            {/* Base image (kept at intrinsic size) */}
+            {/* Base image */}
             {img ? (
                 <KImage image={img} width={width} height={height} />
             ) : (
                 <Rect width={width} height={height} fill="#eee" stroke="#999" />
             )}
 
-            {/* -------- Variable reporter: show name with NO white bg, white text -------- */}
+            {/* Variable reporter: name (no white bg, white text) */}
             {b.type === "variable" && (
                 (() => {
                     const R =
@@ -185,24 +178,24 @@ export default function Block(props) {
                             fontSize={14}
                             fontStyle="bold"
                             align="center"
-                            fill="#ffffff"     // white text
+                            fill="#ffffff"
                             listening={false}
                         />
                     );
                 })()
             )}
 
-            {/* -------- Standard input overlays (white pills) --------
-          Skip name when this block uses a dropdown for it. */}
+            {/* Standard input overlays (white pills) — rendered ONLY if SVG has input:* */}
             {Object.entries(slots).map(([name, slot]) => {
-                const isNameDropdownSlot = wantsVarDropdown && name === "name";
-                if (isNameDropdownSlot) return null; // handled by dropdown UI below
+                // name slot is handled by dropdown for set/change variable
+                if ((isVarSetter || isVarChanger) && name === "name") return null;
 
                 const R = slotLocal(slot);
                 const conn = getInputConnection(name);
                 const typed = (b.inputs && b.inputs[name]) || "";
 
-                const showOverlay = !conn; // hide white overlay when a child is snapped in
+                const showOverlay = !conn;          // hide if a child block is connected
+                const showText = !conn && !!typed;
 
                 return (
                     <React.Fragment key={name}>
@@ -212,13 +205,11 @@ export default function Block(props) {
                                 y={R.y}
                                 width={R.w}
                                 height={R.h}
-                                cornerRadius={Math.max(4, R.rx)}
+                                cornerRadius={Math.max(10, R.rx)}
                                 fill="#fff"
                                 stroke="rgba(0,0,0,0.35)"
                                 strokeWidth={1}
-                                onMouseDown={(e) => {
-                                    e.cancelBubble = true;
-                                }}
+                                onMouseDown={(e) => { e.cancelBubble = true; }}
                                 onDblClick={(e) => {
                                     e.cancelBubble = true;
                                     props.onRequestEditInput?.({
@@ -230,7 +221,7 @@ export default function Block(props) {
                                 }}
                             />
                         )}
-                        {typed && (
+                        {showText && (
                             <KText
                                 x={R.x + 8}
                                 y={R.y + Math.max(4, (R.h - 16) / 2)}
@@ -244,22 +235,16 @@ export default function Block(props) {
                 );
             })}
 
-            {/* -------- Variable name dropdown for set_variable / change_variable -------- */}
+            {/* Variable name dropdown for set_variable / change_variable */}
             {(b.type === "set_variable" || b.type === "change_variable") && (
                 (() => {
-                    // shift dropdown 18px to the RIGHT as requested
                     const base = nameSlotRect;
-                    let R = { ...base, x: base.x };            // default for set_variable
-
-                    if (b.type === "change_variable") {
-                        R = { ...base, x: base.x + 18 };         // nudge right only for change_variable
-                    }
-
-                    const current = (b.inputs && b.inputs.name) || (variables[0]?.name ?? "choose…");
+                    const R = b.type === "change_variable" ? { ...base, x: base.x + 18 } : base;
+                    const current =
+                        (b.inputs && b.inputs.name) || (variables[0]?.name ?? "choose…");
 
                     return (
                         <Group>
-                            {/* Dropdown button */}
                             <Rect
                                 x={R.x}
                                 y={R.y}
@@ -281,7 +266,6 @@ export default function Block(props) {
                                 fontSize={14}
                                 fill="#111"
                             />
-                            {/* Caret */}
                             <KText
                                 x={R.x + R.w - 18}
                                 y={R.y + Math.max(2, (R.h - 14) / 2)}
@@ -290,7 +274,6 @@ export default function Block(props) {
                                 fill="#555"
                             />
 
-                            {/* Menu */}
                             {openDropdown === "name" && (
                                 <Group>
                                     <Rect
@@ -351,7 +334,6 @@ export default function Block(props) {
                 })()
             )}
 
-            {/* Selection outline */}
             {isSelected && (
                 <Rect
                     x={-6}
