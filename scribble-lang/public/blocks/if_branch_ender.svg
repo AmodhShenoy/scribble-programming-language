@@ -1,13 +1,41 @@
 <svg width="394" height="168" viewBox="0 0 394 168" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M196.548 167.5L222.096 133H171L196.548 167.5Z" fill="#F0B43B"/>
-<path d="M208 106H186V133H208V106Z" fill="#F0B43B"/>
-<rect x="45" y="84" width="305" height="22" fill="#F0B43B"/>
-<rect y="34" width="110" height="24" fill="#F0B43B"/>
-<path d="M55.5 34H30V0H30.3223L55.5 34Z" fill="#F0B43B"/>
-<path d="M81 34H55.5L80.678 0H81V34Z" fill="#F0B43B"/>
-<path d="M67 58H45V84H67V58Z" fill="#F0B43B"/>
-<rect x="284" y="34" width="110" height="24" fill="#F0B43B"/>
-<path d="M339.5 34H314V0H314.322L339.5 34Z" fill="#F0B43B"/>
-<path d="M365 34H339.5L364.678 0H365V34Z" fill="#F0B43B"/>
-<path d="M350 58H328V84H350V58Z" fill="#F0B43B"/>
+<g id="if_branch_ender">
+<g id="next_block_connector">
+<circle id="anchor:next" opacity="0.01" cx="203" cy="149" r="1" fill="#D9D9D9"/>
+<g id="border">
+<path d="M203 148L228 123H178L203 148Z" fill="white"/>
+<path d="M203 143L223 123H183L203 143Z" fill="white"/>
+</g>
+<g id="tip">
+<path d="M203 143L223 123H183L203 143Z" fill="#F0B43B"/>
+<path d="M203 139L219 123H187L203 139Z" fill="#F0B43B"/>
+</g>
+<path id="shaft" d="M215.048 101H193.048V123H215.048V101Z" fill="#F0B43B"/>
+<rect id="connector_block" x="47" y="84" width="319" height="22" fill="#F0B43B"/>
+</g>
+<g id="false_branch_ender">
+<path id="false_connector_vert" d="M69 58H47V84H69V58Z" fill="#F0B43B"/>
+<g id="prev_block_connector">
+<g id="capTop">
+<path d="M58 34H33V9L58 34Z" fill="#F0B43B"/>
+<path d="M83 34H58L83 9V34Z" fill="#F0B43B"/>
+</g>
+<rect id="Rectangle 2" x="33" y="34" width="50" height="24" fill="#F0B43B"/>
+<path id="stripe" d="M83 14L58 39L33 14V9L58 34L83 9V14Z" fill="white"/>
+<circle id="anchor:false-in" opacity="0.01" cx="58" cy="34" r="1" fill="#D9D9D9"/>
+</g>
+</g>
+<g id="true_branch_ender">
+<path id="true_connector_vert" d="M366 58H344V84H366V58Z" fill="#F0B43B"/>
+<g id="prev_block_connector_2">
+<g id="capTop_2">
+<path d="M355 34H330V9L355 34Z" fill="#F0B43B"/>
+<path d="M380 34H355L380 9V34Z" fill="#F0B43B"/>
+</g>
+<rect id="Rectangle 2_2" x="330" y="34" width="50" height="24" fill="#F0B43B"/>
+<path id="stripe_2" d="M380 14L355 39L330 14V9L355 34L380 9V14Z" fill="white"/>
+<circle id="anchor:true-in" opacity="0.01" cx="355" cy="34" r="1" fill="#D9D9D9"/>
+</g>
+</g>
+</g>
 </svg>

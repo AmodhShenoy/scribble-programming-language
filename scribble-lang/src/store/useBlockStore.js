@@ -2,24 +2,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-/**
- * Edge shapes:
- *  - { kind: "stack",  from, to }
- *  - { kind: "branch", from, to, meta:{ branch: "true"|"false"|"body" } }
- *  - { kind: "input",  from, to, meta:{ port: "<slotName>" } }
- *
- * Block shape:
- *  - { id, type, x, y, w, h, inputs?: { [port]: string } }
- */
-
-function uid(prefix = "") {
-    return (
-        prefix +
-        Math.random().toString(36).slice(2, 8) +
-        Math.random().toString(36).slice(2, 6)
-    );
-}
-
 export const useBlockStore = create(
     persist(
         (set, get) => ({
@@ -27,37 +9,35 @@ export const useBlockStore = create(
             blocks: [],
             edges: [],
             selectedId: null,
-            svgInfoByType: {}, // parsed anchors, inputs, viewBox per block type
-
-            // Variables registry for palette (not the interpreter runtime state)
-            // Shape: [{ id, name, initialValue }]
-            variables: [],
-
-            // --------------- variables --------------
-            createVariable: (name, initialValue = 0) =>
-                set((s) => {
-                    const clean = (name ?? "").trim();
-                    if (!clean) return {};
-                    // ensure unique display name
-                    let finalName = clean;
-                    let n = 2;
-                    const taken = new Set(s.variables.map((v) => v.name));
-                    while (taken.has(finalName)) {
-                        finalName = `${clean} (${n++})`;
-                    }
-                    const v = { id: uid("var_"), name: finalName, initialValue };
-                    return { variables: [...s.variables, v] };
-                }),
-
-            deleteVariable: (id) =>
-                set((s) => ({ variables: s.variables.filter((v) => v.id !== id) })),
+            svgInfoByType: {},      // parsed anchors, inputs, viewBox per block type
+            endersByIf: {},         // map: if_else.id -> branch ender id
 
             // --------------- blocks ----------------
             addBlock: (b) =>
-                set((s) => ({
-                    // do NOT force default w/h; Block registers its natural SVG size
-                    blocks: [...s.blocks, { ...b, inputs: b.inputs ?? {} }],
-                })),
+                set((s) => {
+                    const base = { ...b, inputs: b.inputs ?? {} };
+                    const nextBlocks = [...s.blocks, base];
+                    let endersByIf = s.endersByIf;
+
+                    // Auto-create an unsnapped ender for every if_else
+                    if (base.type === "if_else") {
+                        const eid = `${base.id}__ender`;
+                        const ender = {
+                            id: eid,
+                            type: "if_branch_ender", // base variant
+                            x: (base.x ?? 0),
+                            y: (base.y ?? 0) + (base.h ?? 120) + 32, // just below; layout will refine
+                            w: undefined,
+                            h: undefined,
+                            inputs: {},
+                            data: { parentIf: base.id },
+                        };
+                        nextBlocks.push(ender);
+                        endersByIf = { ...endersByIf, [base.id]: eid };
+                    }
+
+                    return { blocks: nextBlocks, endersByIf };
+                }),
 
             moveBlock: (id, x, y) =>
                 set((s) => ({
@@ -69,7 +49,6 @@ export const useBlockStore = create(
                     blocks: s.blocks.map((b) => (b.id === id ? { ...b, ...updates } : b)),
                 })),
 
-            // only write if changed (prevents churn)
             registerSize: (id, w, h) =>
                 set((s) => {
                     const idx = s.blocks.findIndex((b) => b.id === id);
@@ -93,7 +72,6 @@ export const useBlockStore = create(
             // -------------- connections ------------
             connectStack: (aboveId, belowId) => {
                 const { edges } = get();
-                // Only one outgoing "next" from a block and only one incoming "prev" to a block
                 const pruned = edges.filter(
                     (e) => !(e.kind === "stack" && (e.from === aboveId || e.to === belowId))
                 );
@@ -103,20 +81,13 @@ export const useBlockStore = create(
 
             connectBranch: (parentId, branch, childId) => {
                 const { edges } = get();
-                // One child per (parent,branch)
                 const pruned = edges.filter(
-                    (e) =>
-                        !(
-                            e.kind === "branch" &&
-                            e.from === parentId &&
-                            e.meta?.branch === branch
-                        )
+                    (e) => !(e.kind === "branch" && e.from === parentId && e.meta?.branch === branch)
                 );
                 pruned.push({ kind: "branch", from: parentId, to: childId, meta: { branch } });
                 set({ edges: pruned });
             },
 
-            // plug a block into a named input slot (clears typed value)
             connectInput: (parentId, port, childId) => {
                 const { edges, blocks } = get();
                 const pruned = edges.filter(
@@ -130,16 +101,13 @@ export const useBlockStore = create(
                 set({ edges: pruned, blocks: nextBlocks });
             },
 
-            // set a literal value for an input slot (removes any block connected there)
             setInputValue: (blockId, port, value) =>
                 set((s) => {
                     const edges = s.edges.filter(
                         (e) => !(e.kind === "input" && e.from === blockId && e.meta?.port === port)
                     );
                     const blocks = s.blocks.map((b) =>
-                        b.id === blockId
-                            ? { ...b, inputs: { ...(b.inputs || {}), [port]: value } }
-                            : b
+                        b.id === blockId ? { ...b, inputs: { ...(b.inputs || {}), [port]: value } } : b
                     );
                     return { edges, blocks };
                 }),
@@ -148,32 +116,43 @@ export const useBlockStore = create(
                 set((s) => ({ edges: s.edges.filter((e) => e.from !== id && e.to !== id) })),
 
             deleteBlock: (id) => {
-                const { blocks, edges, selectedId } = get();
+                const { blocks, edges, selectedId, endersByIf } = get();
 
-                // re-link stack neighbors if present
+                // If deleting an if_else, also delete its ender
+                let toDelete = new Set([id]);
+                const ifIds = Object.keys(endersByIf || {});
+                for (const ifId of ifIds) {
+                    if (ifId === id) {
+                        const enderId = endersByIf[ifId];
+                        if (enderId) toDelete.add(enderId);
+                    }
+                }
+
                 const above = edges.find((e) => e.kind === "stack" && e.to === id)?.from || null;
                 const below = edges.find((e) => e.kind === "stack" && e.from === id)?.to || null;
 
-                const nb = blocks.filter((b) => b.id !== id);
-                let ne = edges.filter((e) => e.from !== id && e.to !== id);
+                const nb = blocks.filter((b) => !toDelete.has(b.id));
+                let ne = edges.filter((e) => !toDelete.has(e.from) && !toDelete.has(e.to));
 
                 if (above && below) {
-                    // ensure no duplicate stack link remains
-                    ne = ne.filter(
-                        (e) => !(e.kind === "stack" && (e.from === above || e.to === below))
-                    );
+                    ne = ne.filter((e) => !(e.kind === "stack" && (e.from === above || e.to === below)));
                     ne.push({ kind: "stack", from: above, to: below });
+                }
+
+                const newEnders = { ...(endersByIf || {}) };
+                for (const ifId of Object.keys(newEnders)) {
+                    if (toDelete.has(ifId) || toDelete.has(newEnders[ifId])) delete newEnders[ifId];
                 }
 
                 set({
                     blocks: nb,
                     edges: ne,
                     selectedId: selectedId === id ? null : selectedId,
+                    endersByIf: newEnders,
                 });
             },
 
-            // ------------- helpers used by UI/snapper -------------
-            // Generic connector that dispatches to correct edge type
+            // ------------- helpers for snapper -------------
             connectEdge: ({ fromId, fromPort, toId }) => {
                 if (String(fromPort || "").startsWith("input:")) {
                     const port = String(fromPort).split(":")[1];
@@ -181,21 +160,17 @@ export const useBlockStore = create(
                 } else if (fromPort === "next") {
                     get().connectStack(fromId, toId);
                 } else {
-                    // "true" | "false" | "body" etc
                     get().connectBranch(fromId, String(fromPort), toId);
                 }
             },
 
-            // cycle detection across all edges
             wouldCreateCycle: (fromId, toId) => {
                 const { edges } = get();
                 const adj = new Map();
-
                 for (const e of edges) {
                     if (!adj.has(e.from)) adj.set(e.from, []);
                     adj.get(e.from).push(e.to);
                 }
-                // include proposed edge
                 if (!adj.has(fromId)) adj.set(fromId, []);
                 adj.get(fromId).push(toId);
 
@@ -212,8 +187,6 @@ export const useBlockStore = create(
                 return false;
             },
         }),
-        {
-            name: "scribble-blocks-v2",
-        }
+        { name: "scribble-blocks-v2" }
     )
 );

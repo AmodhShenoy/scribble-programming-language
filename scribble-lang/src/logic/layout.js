@@ -1,119 +1,109 @@
 // src/logic/layout.js
-import { useBlockStore } from "../store/useBlockStore.js";
-import { getSvgInfo } from "../bootstrap/loadSvgInfo.js";
+import { useBlockStore } from "../store/useBlockStore";
 
-// default padding INSIDE slots around a child reporter
-export const SLOT_PAD = 8;
-
-// ----- coord helpers -------------------------------------------------------
-export function localToWorld(block, pt) {
-    const info = getSvgInfo(block.type);
-    const sx = block.w / info.viewBox.w;
-    const sy = block.h / info.viewBox.h;
-    return { x: block.x + pt.x * sx, y: block.y + pt.y * sy };
+// ---------- helpers ----------
+function byIdMap(blocks) {
+    const m = new Map();
+    for (const b of blocks) m.set(b.id, b);
+    return m;
+}
+function headOfBranch(edges, ifId, branch) {
+    const e = edges.find(
+        (x) => x.kind === "branch" && x.from === ifId && x.meta?.branch === branch
+    );
+    return e ? e.to : null;
+}
+function nextOf(edges, id) {
+    return edges.find((e) => e.kind === "stack" && e.from === id)?.to || null;
+}
+function tailOfChain(edges, startId) {
+    let cur = startId;
+    if (!cur) return null;
+    while (true) {
+        const n = nextOf(edges, cur);
+        if (!n) return cur;
+        cur = n;
+    }
+}
+function lengthOfChain(edges, startId) {
+    let cur = startId, n = 0;
+    while (cur) { n++; cur = nextOf(edges, cur); }
+    return n;
+}
+function getAnchor(info, key, fallbackW = 0, fallbackH = 0) {
+    if (info?.anchors?.[key]) return info.anchors[key];
+    if (key === "next") return { x: (info?.viewBox?.w || fallbackW) / 2, y: info?.viewBox?.h || fallbackH };
+    if (key === "prev") return { x: (info?.viewBox?.w || fallbackW) / 2, y: 0 };
+    return { x: 0, y: 0 };
+}
+function attachToTargetNext(target, targetInfo, enderInfo, enderAnchorName) {
+    const tNext = getAnchor(targetInfo, "next", target.w, target.h);
+    const eAnchor =
+        enderInfo?.anchors?.[enderAnchorName] || getAnchor(enderInfo, "prev");
+    const worldX = target.x + tNext.x;
+    const worldY = target.y + tNext.y;
+    return { x: Math.round(worldX - eAnchor.x), y: Math.round(worldY - eAnchor.y) };
+}
+function placeUnderIf(ifBlock, ifInfo, enderInfo, offset = 40) {
+    const tNext = getAnchor(ifInfo, "next", ifBlock.w, ifBlock.h);
+    const ePrev = getAnchor(enderInfo, "prev");
+    const worldX = ifBlock.x + tNext.x;
+    const worldY = ifBlock.y + tNext.y + offset;
+    return { x: Math.round(worldX - ePrev.x), y: Math.round(worldY - ePrev.y) };
 }
 
-export function worldToLocal(block, pt) {
-    const info = getSvgInfo(block.type);
-    const sx = block.w / info.viewBox.w;
-    const sy = block.h / info.viewBox.h;
-    return { x: (pt.x - block.x) / sx, y: (pt.y - block.y) / sy };
-}
-
-// ----- slot geometry -------------------------------------------------------
-export function slotWorldRect(parent, port) {
-    const info = getSvgInfo(parent.type);
-    const slot = info.inputs && info.inputs[port];
-    if (!slot) return null;
-    const sx = parent.w / info.viewBox.w;
-    const sy = parent.h / info.viewBox.h;
-    return {
-        x: parent.x + slot.box.x * sx,
-        y: parent.y + slot.box.y * sy,
-        w: slot.box.w * sx,
-        h: slot.box.h * sy,
-        rx: (slot.box.rx || 0) * ((sx + sy) / 2)
-    };
-}
-
-export function slotAnchorWorld(parent, port, side) {
-    const info = getSvgInfo(parent.type);
-    const def = info.inputs && info.inputs[port];
-    if (!def || !def.anchors) return null;
-    const a = def.anchors[side];
-    if (!a) return null;
-    return localToWorld(parent, a);
-}
-
-export function childInputAnchorWorld(child, side) {
-    const info = getSvgInfo(child.type);
-    const key = side === "left" ? "input-left" : "input-right";
-    const a = info.anchors && info.anchors[key];
-    if (!a) return null;
-    return localToWorld(child, a);
-}
-
-export function alignChildIntoSlot(parent, port, child, side) {
-    const ap = slotAnchorWorld(parent, port, side || "left");
-    const ac = childInputAnchorWorld(child, side || "left");
-    if (!ap || !ac) return { x: child.x, y: child.y };
-    return { x: child.x + (ap.x - ac.x), y: child.y + (ap.y - ac.y) };
-}
-
-// ----- reflow (resize parents to fit children) -----------------------------
-export function reflowFrom(parentId, seen) {
+// ---------- public ----------
+export function reflowAllIfBranchEnders() {
     const store = useBlockStore.getState();
-    const parent = store.blocks.find((b) => b.id === parentId);
-    if (!parent) return;
-    const mark = seen || new Set();
-    if (mark.has(parentId)) return;
-    mark.add(parentId);
+    const { blocks, edges, svgInfoByType, endersByIf = {} } = store;
 
-    const info = getSvgInfo(parent.type);
-    const slotDefs = info.inputs || {};
+    const map = byIdMap(blocks);
 
-    // reflow children first
-    const edges = store.edges.filter((e) => e.kind === "input" && e.from === parentId);
-    for (const e of edges) reflowFrom(e.to, mark);
+    for (const ifBlock of blocks) {
+        if (ifBlock.type !== "if_else") continue;
 
-    let desiredW = parent.w;
-    let desiredH = parent.h;
-    const baseW = info.viewBox.w;
-    const baseH = info.viewBox.h;
+        const enderId = endersByIf[ifBlock.id];
+        if (!enderId) continue;
+        const ender = map.get(enderId);
+        if (!ender) continue;
 
-    function rightMargin(slot) {
-        return Math.max(0, baseW - (slot.box.x + slot.box.w));
-    }
-    function bottomMargin(slot) {
-        return Math.max(0, baseH - (slot.box.y + slot.box.h));
-    }
+        const trueHead = headOfBranch(edges, ifBlock.id, "true");
+        const falseHead = headOfBranch(edges, ifBlock.id, "false");
 
-    for (const port of Object.keys(slotDefs)) {
-        const slot = slotDefs[port];
-        const edge = edges.find((e) => e.meta && e.meta.port === port);
-        let needW = slot.box.w;
-        let needH = slot.box.h;
+        const tTail = trueHead ? tailOfChain(edges, trueHead) : null;
+        const fTail = falseHead ? tailOfChain(edges, falseHead) : null;
 
-        if (edge) {
-            const child = store.blocks.find((b) => b.id === edge.to);
-            if (child) {
-                needW = Math.max(needW, child.w + SLOT_PAD * 2);
-                needH = Math.max(needH, child.h + SLOT_PAD * 2);
+        const depthTrue = trueHead ? lengthOfChain(edges, trueHead) : 0;
+        const depthFalse = falseHead ? lengthOfChain(edges, falseHead) : 0;
+
+        const total = Math.min(4, depthTrue + depthFalse);
+        const wantType = total === 0 ? "if_branch_ender" : `if_branch_ender_${total}`;
+
+        const ifInfo = svgInfoByType["if_else"] || {};
+        const enderInfo = svgInfoByType[wantType] || svgInfoByType["if_branch_ender"] || {};
+
+        let pos;
+        if (total === 0) {
+            // no children yet → float below IF
+            pos = placeUnderIf(ifBlock, ifInfo, enderInfo, 32);
+        } else {
+            // odd → TRUE arm using ender anchor "true-in"
+            // even → FALSE arm using ender anchor "false-in"
+            const useTrue = total % 2 === 1;
+            const tailId = useTrue ? (tTail || fTail) : (fTail || tTail); // graceful fallback if one arm empty
+            const target = tailId ? map.get(tailId) : null;
+
+            if (target) {
+                const targetInfo = svgInfoByType[target.type] || {};
+                const enderPort = useTrue ? "true-in" : "false-in";
+                pos = attachToTargetNext(target, targetInfo, enderInfo, enderPort);
+            } else {
+                // nothing to attach → keep under IF
+                pos = placeUnderIf(ifBlock, ifInfo, enderInfo, 32);
             }
         }
 
-        const reqW = slot.box.x + needW + rightMargin(slot);
-        const reqH = slot.box.y + needH + bottomMargin(slot);
-        desiredW = Math.max(desiredW, reqW);
-        desiredH = Math.max(desiredH, reqH);
-    }
-
-    store.registerSize(parent.id, desiredW, desiredH);
-
-    for (const e of edges) {
-        const child = store.blocks.find((b) => b.id === e.to);
-        if (!child) continue;
-        const p = alignChildIntoSlot(parent, e.meta.port, child, "left");
-        store.updateBlock(child.id, { x: p.x, y: p.y });
+        if (ender.type !== wantType) store.updateBlock(ender.id, { type: wantType });
+        if (ender.x !== pos.x || ender.y !== pos.y) store.moveBlock(ender.id, pos.x, pos.y);
     }
 }

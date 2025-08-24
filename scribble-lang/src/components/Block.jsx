@@ -3,6 +3,7 @@ import React from "react";
 import { Group, Image as KImage, Rect, Text as KText } from "react-konva";
 import { useBlockStore } from "../store/useBlockStore";
 import { findSnap } from "../logic/snapper";
+import { reflowAllIfBranchEnders } from "../logic/layout";
 
 function useHtmlImage(src) {
     const [img, setImg] = React.useState(null);
@@ -17,7 +18,6 @@ function useHtmlImage(src) {
 }
 
 export default function Block(props) {
-    // normalize props (store already keeps blocks with these fields)
     const b = props.b ?? {
         id: props.id,
         type: props.type,
@@ -39,14 +39,12 @@ export default function Block(props) {
     const setInputValue = useBlockStore((s) => s.setInputValue);
     const variables = useBlockStore((s) => s.variables);
 
-    // local UI state for dropdowns
-    const [openDropdown, setOpenDropdown] = React.useState(null); // "name" | null
+    const [openDropdown, setOpenDropdown] = React.useState(null);
 
     const info = svgInfoByType[b.type] || {};
     const vbw = info?.viewBox?.w || img?.naturalWidth || 128;
     const vbh = info?.viewBox?.h || img?.naturalHeight || 128;
 
-    // keep block size synced to the SVG’s natural size (no churn)
     React.useEffect(() => {
         if (!b.w || !b.h || b.w !== vbw || b.h !== vbh) {
             registerSize(b.id, vbw, vbh);
@@ -58,15 +56,12 @@ export default function Block(props) {
     const height = b.h ?? vbh;
     const isSelected = selectedId === b.id;
 
-    // scale viewBox -> local pixels
     const sx = width / vbw;
     const sy = height / vbh;
 
-    // 🔑 Only use inputs that the SVG actually exposes
     const slots = info?.inputs || {};
-    const dropdowns = info?.dropdowns || {}; // optional (if your loader provides it)
+    const dropdowns = info?.dropdowns || {};
 
-    // helper: convert slot box (in viewBox units) to local rect
     const slotLocal = (slot) => ({
         x: slot.box.x * sx,
         y: slot.box.y * sy,
@@ -78,25 +73,37 @@ export default function Block(props) {
     const getInputConnection = (slotName) =>
         edges.find((e) => e.kind === "input" && e.from === b.id && e.meta?.port === slotName);
 
+    // variable dropdown placement
     const isVarSetter = b.type === "set_variable";
     const isVarChanger = b.type === "change_variable";
-    const wantsVarDropdown = (isVarSetter || isVarChanger);
+    const wantsVarDropdown = isVarSetter || isVarChanger;
 
-    // rect for the variable-name dropdown: prefer dropdowns.name, else inputs.name, else default
     const nameSlotRect = React.useMemo(() => {
-        const src = dropdowns?.name || slots?.name || null;
+        const src = (dropdowns && dropdowns.name) || (slots && slots.name) || null;
         if (src) return slotLocal(src);
-        // fallback default area (only for dropdown UI, not for white input pills)
+        // (You asked to remove fallbacks for normal inputs; this fallback is only for the dropdown box
+        // if an old SVG is missing it.)
         return { x: width * 0.16, y: height * 0.34, w: width * 0.30, h: Math.max(26, height * 0.18), rx: 10 };
     }, [dropdowns, slots, sx, sy, width, height]);
 
     const closeDropdown = () => setOpenDropdown(null);
 
+    // ports that must be reporter-only (no typable pill)
+    const logicOnlyPorts = new Set(
+        b.type === "if_else"
+            ? ["condition"]
+            : b.type === "repeat_until"
+                ? ["until"]
+                : b.type === "repeat_times"
+                    ? ["times"]
+                    : []
+    );
+
     return (
         <Group
             x={b.x}
             y={b.y}
-            draggable
+            draggable={!String(b.type).startsWith("if_branch_ender")}
             onClick={(e) => {
                 e.cancelBubble = true;
                 selectBlock(b.id);
@@ -119,31 +126,47 @@ export default function Block(props) {
             onDragMove={(e) => {
                 e.cancelBubble = true;
                 const p = e.target.position();
+                // Update only this block; do not touch stage pos/scale here
                 moveBlock(b.id, p.x, p.y);
             }}
             onDragEnd={(e) => {
                 e.cancelBubble = true;
 
-                const stage = e.target.getStage();
+                const node = e.target;
+                const stage = node.getStage();
                 const scale = props.stageScale ?? (stage ? stage.scaleX() : 1);
 
-                const state = useBlockStore.getState();
-                const meNow = state.blocks.find((x) => x.id === b.id);
+                // read/store through zustand snapshot so we don't re-render during drag teardown
+                const store = useBlockStore.getState();
+                const meNow = store.blocks.find((x) => x.id === b.id);
                 if (!meNow) {
                     props.onBlockDragEnd?.();
                     return;
                 }
 
-                const snap = findSnap(meNow, state.blocks, state.svgInfoByType, scale, { tuck: false });
-                if (snap) {
-                    state.moveBlock(b.id, meNow.x + snap.dx, meNow.y + snap.dy);
+                // find candidate snap (uses latest positions already written in onDragMove)
+                const snap = findSnap(
+                    meNow,
+                    store.blocks,
+                    store.svgInfoByType,
+                    scale,
+                    { edges: store.edges }
+                );
 
-                    if (!state.wouldCreateCycle(snap.target.blockId, b.id)) {
+                if (snap) {
+                    // place block at snapped position
+                    const nx = meNow.x + snap.dx;
+                    const ny = meNow.y + snap.dy;
+                    store.moveBlock(b.id, nx, ny);
+
+                    // connect unless it creates a cycle
+                    if (!store.wouldCreateCycle(snap.target.blockId, b.id)) {
                         if (String(snap.target.port).startsWith("input:")) {
-                            const port = snap.target.port.split(":")[1];
-                            state.connectInput(snap.target.blockId, port, b.id);
+                            const port = snap.target.port.slice("input:".length);
+                            store.connectInput(snap.target.blockId, port, b.id);
                         } else {
-                            state.connectEdge({
+                            // "next" | "true" | "false" | "body" ...
+                            store.connectEdge({
                                 fromId: snap.target.blockId,
                                 fromPort: snap.target.port,
                                 toId: b.id,
@@ -153,49 +176,55 @@ export default function Block(props) {
                 }
 
                 props.onBlockDragEnd?.();
+
+                // Reflow branch enders after the snap is committed
+                requestAnimationFrame(() => {
+                    try {
+                        reflowAllIfBranchEnders();
+                    } catch (err) {
+                        console.error(err);
+                    }
+                });
             }}
         >
-            {/* Base image */}
+            {/* base SVG */}
             {img ? (
                 <KImage image={img} width={width} height={height} />
             ) : (
                 <Rect width={width} height={height} fill="#eee" stroke="#999" />
             )}
 
-            {/* Variable reporter: name (no white bg, white text) */}
-            {b.type === "variable" && (
-                (() => {
-                    const R =
-                        (slots?.name ? slotLocal(slots.name) : null) ||
-                        { x: width * 0.18, y: height * 0.32, w: width * 0.64, h: Math.max(24, height * 0.24), rx: 12 };
-                    const name = (b.inputs && b.inputs.name) || "variable";
-                    return (
-                        <KText
-                            x={R.x + 8}
-                            y={R.y + (R.h - 16) / 2}
-                            width={R.w - 16}
-                            text={name}
-                            fontSize={14}
-                            fontStyle="bold"
-                            align="center"
-                            fill="#ffffff"
-                            listening={false}
-                        />
-                    );
-                })()
-            )}
+            {/* variable reporter: white text, no pill */}
+            {b.type === "variable" && (() => {
+                const R =
+                    (slots?.name ? slotLocal(slots.name) : null) ||
+                    { x: width * 0.18, y: height * 0.32, w: width * 0.64, h: Math.max(24, height * 0.24), rx: 12 };
+                const name = (b.inputs && b.inputs.name) || "variable";
+                return (
+                    <KText
+                        x={R.x + 8}
+                        y={R.y + (R.h - 16) / 2}
+                        width={R.w - 16}
+                        text={name}
+                        fontSize={14}
+                        fontStyle="bold"
+                        align="center"
+                        fill="#fff"
+                        listening={false}
+                    />
+                );
+            })()}
 
-            {/* Standard input overlays (white pills) — rendered ONLY if SVG has input:* */}
+            {/* typable input pills – only for slots that aren't logic-only and exist in the SVG */}
             {Object.entries(slots).map(([name, slot]) => {
-                // name slot is handled by dropdown for set/change variable
-                if ((isVarSetter || isVarChanger) && name === "name") return null;
+                const isNameDropdownSlot = wantsVarDropdown && name === "name";
+                if (isNameDropdownSlot) return null;
+                if (logicOnlyPorts.has(name)) return null;
 
                 const R = slotLocal(slot);
                 const conn = getInputConnection(name);
                 const typed = (b.inputs && b.inputs[name]) || "";
-
-                const showOverlay = !conn;          // hide if a child block is connected
-                const showText = !conn && !!typed;
+                const showOverlay = !conn;
 
                 return (
                     <React.Fragment key={name}>
@@ -205,11 +234,13 @@ export default function Block(props) {
                                 y={R.y}
                                 width={R.w}
                                 height={R.h}
-                                cornerRadius={Math.max(10, R.rx)}
+                                cornerRadius={Math.max(4, R.rx)}
                                 fill="#fff"
                                 stroke="rgba(0,0,0,0.35)"
                                 strokeWidth={1}
-                                onMouseDown={(e) => { e.cancelBubble = true; }}
+                                onMouseDown={(e) => {
+                                    e.cancelBubble = true;
+                                }}
                                 onDblClick={(e) => {
                                     e.cancelBubble = true;
                                     props.onRequestEditInput?.({
@@ -221,7 +252,7 @@ export default function Block(props) {
                                 }}
                             />
                         )}
-                        {showText && (
+                        {typed && (
                             <KText
                                 x={R.x + 8}
                                 y={R.y + Math.max(4, (R.h - 16) / 2)}
@@ -235,13 +266,14 @@ export default function Block(props) {
                 );
             })}
 
-            {/* Variable name dropdown for set_variable / change_variable */}
-            {(b.type === "set_variable" || b.type === "change_variable") && (
+            {/* variable name dropdown (set_variable / change_variable) */}
+            {(isVarSetter || isVarChanger) &&
                 (() => {
                     const base = nameSlotRect;
-                    const R = b.type === "change_variable" ? { ...base, x: base.x + 18 } : base;
-                    const current =
-                        (b.inputs && b.inputs.name) || (variables[0]?.name ?? "choose…");
+                    let R = { ...base, x: base.x };
+                    if (b.type === "change_variable") R = { ...base, x: base.x + 18 };
+
+                    const current = (b.inputs && b.inputs.name) || (variables[0]?.name ?? "choose…");
 
                     return (
                         <Group>
@@ -331,8 +363,7 @@ export default function Block(props) {
                             )}
                         </Group>
                     );
-                })()
-            )}
+                })()}
 
             {isSelected && (
                 <Rect

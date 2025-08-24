@@ -1,4 +1,5 @@
-// Preload SVG metadata (anchors, tip height) for snapping — using public/blocks URLs
+// src/bootstrap/loadSvgInfo.js
+// Preload SVG metadata (anchors, inputs, viewBox…) for snapping — served from public/blocks
 import { ensureSvgInfo } from "../logic/svgInfoCache";
 import { useBlockStore } from "../store/useBlockStore";
 
@@ -12,6 +13,10 @@ export const ASSET_URLS = {
     repeat_loop_ender: "/blocks/repeat_loop_ender.svg",
     if_else: "/blocks/if_else.svg",
     if_branch_ender: "/blocks/if_branch_ender.svg",
+    if_branch_ender_1: "/blocks/if_branch_ender_1.svg",
+    if_branch_ender_2: "/blocks/if_branch_ender_2.svg",
+    if_branch_ender_3: "/blocks/if_branch_ender_3.svg",
+    if_branch_ender_4: "/blocks/if_branch_ender_4.svg",
     go_to: "/blocks/go_to.svg",
     move: "/blocks/move.svg",
     change_x_by: "/blocks/change_x_by.svg",
@@ -30,7 +35,9 @@ export const ASSET_URLS = {
     divide_operator: "/blocks/divide_operator.svg",
     mod_operator: "/blocks/mod_operator.svg",
     gt_operator: "/blocks/gt_operator.svg",
+    gte_operator: "/blocks/gte_operator.svg",
     lt_operator: "/blocks/lt_operator.svg",
+    lte_operator: "/blocks/lte_operator.svg",
     et_operator: "/blocks/et_operator.svg",
     and_operator: "/blocks/and_operator.svg",
     or_operator: "/blocks/or_operator.svg",
@@ -41,6 +48,17 @@ export function getAssetUrl(type) {
     return ASSET_URLS[type];
 }
 
+/**
+ * Simple synchronous getter used by renderers/snapper.
+ * Returns whatever is currently cached in the store (or null if not loaded yet).
+ */
+export function getSvgInfo(type) {
+    return useBlockStore.getState().svgInfoByType[type] || null;
+}
+
+/**
+ * Preload all SVG infos at boot (recommended so getSvgInfo() is filled).
+ */
 export async function preloadSvgInfo() {
     const setSvgInfo = useBlockStore.getState().setSvgInfo;
     await Promise.all(
@@ -48,4 +66,14 @@ export async function preloadSvgInfo() {
             ensureSvgInfo(type, url, setSvgInfo)
         )
     );
+}
+
+/**
+ * Optional helper if you want to lazily ensure a single type is loaded.
+ */
+export async function ensureOneSvgInfo(type) {
+    const url = ASSET_URLS[type];
+    if (!url) return null;
+    const setSvgInfo = useBlockStore.getState().setSvgInfo;
+    return ensureSvgInfo(type, url, setSvgInfo);
 }
