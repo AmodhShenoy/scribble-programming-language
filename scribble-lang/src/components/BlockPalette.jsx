@@ -3,7 +3,6 @@ import React from "react";
 import { useBlockStore } from "../store/useBlockStore";
 import { getAssetUrl } from "../bootstrap/loadSvgInfo";
 
-// Small id helper (matches store style)
 function uid(prefix = "") {
     return (
         prefix +
@@ -12,60 +11,111 @@ function uid(prefix = "") {
     );
 }
 
-// Non-variable groups you already have in the palette.
-// (Keep your list; I’m including a reasonable default.)
-const ACTIONS = [
+// classify helpers
+const isOperator = (t) =>
+    t.endsWith("_operator") ||
+    [
+        "plus_operator",
+        "minus_operator",
+        "multiply_operator",
+        "divide_operator",
+        "mod_operator",
+        "gt_operator",
+        "gte_operator",
+        "lt_operator",
+        "lte_operator",
+        "eq_operator",
+        "neq_operator",
+        "and_operator",
+        "or_operator",
+        "not_operator",
+        "et_operator",
+    ].includes(t);
+
+const isInternal = (t) =>
+    t.startsWith("if_branch_ender") ||
+    t.startsWith("repeat_loop_ender") ||
+    t.startsWith("branch_ender") ||
+    t.startsWith("loop_ender");
+
+const isVariableReporter = (t) => t === "variable";
+const isVariableStmt = (t) => t === "set_variable" || t === "change_variable";
+
+// Optional: show some common actions first, then the rest alphabetically
+const PINNED_ACTION_ORDER = [
     "start",
     "stop",
     "say",
     "think",
     "wait",
-    "clear",
     "go_to",
     "move",
     "change_x_by",
     "change_y_by",
-    "turn_clockwise",
     "turn_anticlockwise",
+    "turn_clockwise",
     "point_in",
     "if_else",
-    "repeat_times",
     "repeat_until",
+    "repeat_times",
 ];
-
-const REPORTERS = [
-    "plus_operator",
-    "minus_operator",
-    "multiply_operator",
-    "divide_operator",
-    "mod_operator",
-    "gt_operator",
-    "gte_operator",
-    "lt_operator",
-    "lte_operator",
-    "et_operator",
-    "and_operator",
-    "or_operator",
-    "not_operator",
-];
-
-// Variable-related block types
-const VAR_TYPES = {
-    variable: "variable", // reporter (shows the name)
-    set: "set_variable",
-    change: "change_variable",
-};
 
 export default function BlockPalette() {
     const addBlock = useBlockStore((s) => s.addBlock);
-    const variables = useBlockStore((s) => s.variables);
+    const svgInfoByType = useBlockStore((s) => s.svgInfoByType ?? {});
+    const variables = useBlockStore((s) => s.variables ?? []);
     const createVariable = useBlockStore((s) => s.createVariable);
 
+    // All known types from what’s actually loaded/registered
+    const allTypes = React.useMemo(
+        () => Object.keys(svgInfoByType || {}),
+        [svgInfoByType]
+    );
+
+    // Filter into groups
+    const operatorTypes = React.useMemo(
+        () => allTypes.filter((t) => isOperator(t) && !isInternal(t)).sort(),
+        [allTypes]
+    );
+
+    const variableStmtTypes = React.useMemo(
+        () =>
+            allTypes
+                .filter((t) => isVariableStmt(t))
+                .sort((a, b) => (a === "set_variable" ? -1 : 1)),
+        [allTypes]
+    );
+
+    const variableReporterAvailable = allTypes.some(isVariableReporter);
+
+    const actionTypes = React.useMemo(() => {
+        const raw = allTypes.filter(
+            (t) =>
+                !isInternal(t) &&
+                !isOperator(t) &&
+                !isVariableReporter(t) &&
+                !isVariableStmt(t)
+        );
+        // Sort with pinned first, then alphabetical for the rest
+        const weight = (t) => {
+            const i = PINNED_ACTION_ORDER.indexOf(t);
+            return i === -1 ? 1000 : i; // big number if not pinned
+        };
+        return [
+            ...raw
+                .filter((t) => PINNED_ACTION_ORDER.includes(t))
+                .sort((a, b) => weight(a) - weight(b)),
+            ...raw
+                .filter((t) => !PINNED_ACTION_ORDER.includes(t))
+                .sort((a, b) => a.localeCompare(b)),
+        ];
+    }, [allTypes]);
+
     const hasVars = variables.length > 0;
+    const firstVarName = hasVars ? variables[0].name : "";
 
     const add = (type, extra = {}) => {
         const assetUrl = getAssetUrl(type);
-        // Initial position near the left edge of the canvas area
         addBlock({
             id: uid("b_"),
             type,
@@ -79,15 +129,12 @@ export default function BlockPalette() {
     const onCreateVariable = () => {
         const name = window.prompt('Enter a variable name (e.g. "score"):');
         if (!name) return;
-        const rawInit = window.prompt(`Initial value for "${name}"? (blank = 0)`) ?? "";
+        const rawInit =
+            window.prompt(`Initial value for "${name}"? (blank = 0)`) ?? "";
         const n = Number(rawInit);
         const init = Number.isFinite(n) ? n : rawInit;
         createVariable(name, init);
     };
-
-    // when user clicks “set”/“change” and we have variables,
-    // default to the first variable name; they can edit later via input slot.
-    const firstVarName = hasVars ? variables[0].name : "";
 
     return (
         <aside
@@ -103,14 +150,13 @@ export default function BlockPalette() {
             }}
         >
             <Section title="Actions">
-                <TileRow items={ACTIONS} onAdd={add} />
+                <TileRow items={actionTypes} onAdd={add} />
             </Section>
 
             <Section title="Operators">
-                <TileRow items={REPORTERS} onAdd={add} />
+                <TileRow items={operatorTypes} onAdd={add} />
             </Section>
 
-            {/* ---------------- Variables LAST ---------------- */}
             <Section
                 title="Variables"
                 extra={
@@ -135,33 +181,58 @@ export default function BlockPalette() {
                     </p>
                 ) : (
                     <>
-                        {/* Generic “set …” and “change …” (shown only when a variable exists) */}
+                        {/* show set/change (if you’ve provided those SVGs) */}
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-                            <Tile
-                                type={VAR_TYPES.set}
-                                label="set"
-                                onClick={() =>
-                                    add(VAR_TYPES.set, { inputs: { name: firstVarName, value: 0 } })
-                                }
-                            />
-                            <Tile
-                                type={VAR_TYPES.change}
-                                label="change"
-                                onClick={() =>
-                                    add(VAR_TYPES.change, { inputs: { name: firstVarName, delta: 1 } })
-                                }
-                            />
+                            {variableStmtTypes.includes("set_variable") && (
+                                <Tile
+                                    type="set_variable"
+                                    label="set"
+                                    onClick={() =>
+                                        add("set_variable", { inputs: { name: firstVarName, value: 0 } })
+                                    }
+                                />
+                            )}
+                            {variableStmtTypes.includes("change_variable") && (
+                                <Tile
+                                    type="change_variable"
+                                    label="change"
+                                    onClick={() =>
+                                        add("change_variable", {
+                                            inputs: { name: firstVarName, delta: 1 },
+                                        })
+                                    }
+                                />
+                            )}
                         </div>
 
-                        {/* One “variable.svg” per created variable with the name overlaid */}
+                        {/* one reporter tile per created variable */}
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                            {variables.map((v) => (
-                                <VariableTile
-                                    key={v.id}
-                                    varName={v.name}
-                                    onClick={() => add(VAR_TYPES.variable, { inputs: { name: v.name } })}
-                                />
-                            ))}
+                            {variables.map((v) =>
+                                variableReporterAvailable ? (
+                                    <VariableTile
+                                        key={v.id}
+                                        varName={v.name}
+                                        onClick={() =>
+                                            add("variable", { inputs: { name: v.name } })
+                                        }
+                                    />
+                                ) : (
+                                    <button
+                                        key={v.id}
+                                        onClick={() => add("variable", { inputs: { name: v.name } })}
+                                        style={{
+                                            border: "1px dashed #444",
+                                            borderRadius: 8,
+                                            padding: "6px 8px",
+                                            background: "transparent",
+                                            color: "#bbb",
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        {v.name}
+                                    </button>
+                                )
+                            )}
                         </div>
                     </>
                 )}
@@ -170,7 +241,7 @@ export default function BlockPalette() {
     );
 }
 
-/* ---------------- UI bits ---------------- */
+/* ---------- UI bits ---------- */
 
 function Section({ title, children, extra }) {
     return (
@@ -183,7 +254,9 @@ function Section({ title, children, extra }) {
                     marginBottom: 8,
                 }}
             >
-                <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, opacity: 0.8 }}>{title}</h3>
+                <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, opacity: 0.8 }}>
+                    {title}
+                </h3>
                 {extra}
             </div>
             {children}
@@ -249,7 +322,7 @@ function Tile({ type, onClick, label }) {
 }
 
 function VariableTile({ varName, onClick }) {
-    const url = getAssetUrl("variable"); // public/blocks/variable.svg
+    const url = getAssetUrl("variable");
     return (
         <button
             onClick={onClick}
@@ -271,7 +344,6 @@ function VariableTile({ varName, onClick }) {
                 alt={varName}
                 style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
             />
-            {/* Name overlay — this visually “replaces” the text layer in the SVG for the menu tile */}
             <div
                 style={{
                     position: "absolute",

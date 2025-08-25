@@ -7,12 +7,28 @@ export const useBlockStore = create(
         (set, get) => ({
             // ---------------- state ----------------
             blocks: [],
+            variables: [],
             edges: [],
             selectedId: null,
             svgInfoByType: {},      // parsed anchors, inputs, viewBox per block type
             endersByIf: {},         // map: if_else.id -> branch ender id
 
             // --------------- blocks ----------------
+            createVariable: (name, initialValue = 0) =>
+                set((state) => {
+                    const id =
+                        "var_" +
+                        Math.random().toString(36).slice(2, 8) +
+                        Math.random().toString(36).slice(2, 6);
+
+                    // avoid dup names: if exists, just return state unchanged
+                    if (state.variables?.some((v) => v.name === name)) return state;
+
+                    return {
+                        variables: [...(state.variables ?? []), { id, name, value: initialValue }],
+                    };
+                }),
+
             addBlock: (b) =>
                 set((s) => {
                     const base = { ...b, inputs: b.inputs ?? {} };
