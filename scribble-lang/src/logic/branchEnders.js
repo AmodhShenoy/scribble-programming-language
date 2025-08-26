@@ -1,19 +1,18 @@
 // src/logic/branchEnders.js
 //
-// IF branch-ender logic only. Separate from repeat logic.
-// Behavior:
-// - Create "if_branch_ender_0" when an if_else block is created.
-// - Each time a child is snapped into true/false, replace the ender with
-//   "if_branch_ender_1"..."if_branch_ender_4" based on the longest branch,
-//   and place it so both inputs meet the 'next' anchors of the two arms.
+// Numbered IF branch enders only: if_branch_ender_0..4
+// 0: on IF creation (below IF)
+// 1 & 3: ender.true-in → next of TRUE arm's last child
+// 2 & 4: ender.false-in → next of FALSE arm's last child
 
 import { useBlockStore } from "../store/useBlockStore";
 
-const LOG = (...a) => console.debug("[branchEnders]", ...a);
+const LOG = (...a) => console.log("[branchEnders]", ...a);
 
-// ---------- helpers ----------
-function getState(s) { return s || useBlockStore.getState(); }
-function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+// Per-IF counter: 0 at creation, then 1..4 as children are added (T,F,T,F)
+const IF_SNAP_COUNT = new Map();
+
+/* ---------------- helpers ---------------- */
 
 function lastInStack(startId, edges) {
     if (!startId) return null;
@@ -25,177 +24,226 @@ function lastInStack(startId, edges) {
     }
 }
 
-function stackLength(headId, edges) {
-    if (!headId) return 0;
-    let n = 1, cur = headId;
-    while (true) {
-        const e = edges.find((x) => x.kind === "stack" && x.from === cur);
-        if (!e) return n;
-        n += 1;
-        cur = e.to;
-    }
+function pickAnchor(info, name) {
+    if (!info || !info.anchors) return null;
+    return (
+        info.anchors[name] ||
+        info.anchors[name.replace("-", "_")] ||
+        info.anchors[name.replace("-", "")]
+    );
 }
 
 function getWorldAnchor(block, info, name) {
-    if (!block || !info?.anchors?.[name]) return null;
+    const a = block && info && pickAnchor(info, name);
+    if (!a) return null;
     const vb = info.viewBox || { w: block.w || 1, h: block.h || 1 };
     const sx = (block.w || vb.w) / vb.w;
     const sy = (block.h || vb.h) / vb.h;
-    const a = info.anchors[name];
     return { x: block.x + a.x * sx, y: block.y + a.y * sy };
 }
 
 function getAnchorOffset(block, info, name) {
-    if (!block || !info?.anchors?.[name]) return null;
+    const a = block && info && pickAnchor(info, name);
+    if (!a) return null;
     const vb = info.viewBox || { w: block.w || 1, h: block.h || 1 };
     const sx = (block.w || vb.w) / vb.w;
     const sy = (block.h || vb.h) / vb.h;
-    const a = info.anchors[name];
     return { dx: a.x * sx, dy: a.y * sy };
 }
 
-function outgoingBranches(state, ifId) {
-    const { edges } = state;
-    return edges.filter((e) => e.kind === "branch" && e.from === ifId);
+function variantOf(b) {
+    const m = String(b?.type ?? "").match(/if_branch_ender_(\d+)/);
+    return m ? parseInt(m[1], 10) : -1;
 }
 
-function headsForIf(state, ifBlock) {
-    const outs = outgoingBranches(state, ifBlock.id);
-    LOG("if", ifBlock.id, "outgoing:", outs.map(o => JSON.stringify({ kind: o.kind, from: o.from, to: o.to, meta: o.meta })));
-
-    // prefer meta.branch when present
-    let trueHead = null, falseHead = null;
-    for (const e of outs) {
-        if (e.meta?.branch === "true") trueHead = e.to;
-        if (e.meta?.branch === "false") falseHead = e.to;
-    }
-    // fallback: first = true, second = false
-    if (!trueHead && outs[0]) trueHead = outs[0].to;
-    if (!falseHead && outs[1]) falseHead = outs[1].to;
-
-    return { trueHead, falseHead };
+// Remove *all* if_branch_ender variants for a given ifId by rewriting state in one setState call
+function removeAllEndersFor(ifId) {
+    useBlockStore.setState((s) => {
+        const toKill = s.blocks.filter(
+            (b) =>
+                (b.type === "if_branch_ender" ||
+                    String(b.type).startsWith("if_branch_ender_")) &&
+                b.data?.pairWith === ifId
+        );
+        if (toKill.length) {
+            LOG("purge", toKill.map((x) => `${x.type}:${x.id}`));
+        }
+        return {
+            ...s,
+            blocks: s.blocks.filter((b) => !toKill.includes(b)),
+        };
+    });
 }
 
-function enderTypeForCount(count) {
-    const idx = clamp(count, 0, 4);
-    return `if_branch_ender_${idx}`;
-}
-
-function ensureEnderForIf(state, ifBlock, desiredType) {
-    const { blocks, addBlock } = state;
-    const existing = blocks.find(
-        (b) => b.data?.pairWith === ifBlock.id && String(b.type).startsWith("if_branch_ender")
-    );
-    if (existing) return existing;
-
-    const type = desiredType || "if_branch_ender_0";
+function createNumberedEnder(ifBlock, index) {
+    const api = useBlockStore.getState();
+    const type = `if_branch_ender_${index}`;
+    const id = crypto.randomUUID?.() || String(Math.random());
     const ender = {
-        id: crypto.randomUUID?.() || String(Math.random()),
+        id,
         type,
-        x: ifBlock.x + 20,
-        y: ifBlock.y + (ifBlock.h || 100) + 80,
-        data: { pairWith: ifBlock.id, auto: true },
+        x: ifBlock.x + 120,
+        y: ifBlock.y + (ifBlock.h || 120) + 80,
+        data: { pairWith: ifBlock.id, auto: true, variant: index },
     };
-    LOG("create ender", ender.id, "type", ender.type, "at", { x: ender.x, y: ender.y });
-    addBlock(ender);
+    // add via action if present, else inline setState fallback
+    if (typeof api.addBlock === "function") {
+        api.addBlock(ender);
+    } else {
+        useBlockStore.setState((s) => ({ ...s, blocks: [...s.blocks, ender] }));
+    }
+    LOG("create ender", id, "type", type, "at", { x: ender.x, y: ender.y });
     return ender;
 }
 
-function replaceEnderType(state, ender, newType) {
-    if (ender.type === newType) return ender;
-    const { removeBlock, addBlock } = state;
-    const next = { ...ender, id: crypto.randomUUID?.() || String(Math.random()), type: newType };
-    LOG("replace", ender.id, "→", next.id, "type", newType);
-    removeBlock(ender.id);
-    addBlock(next);
-    return next;
+function moveTo(ender, enderInfo, anchorName, worldPoint) {
+    const api = useBlockStore.getState();
+    const off = getAnchorOffset(ender, enderInfo, anchorName);
+    if (!off || !worldPoint) {
+        LOG("WARN moveTo missing anchors", {
+            enderType: ender?.type,
+            anchorName,
+            worldPoint,
+        });
+        return;
+    }
+    const desiredX = worldPoint.x - off.dx;
+    const desiredY = worldPoint.y - off.dy;
+    if (
+        Math.abs((ender.x ?? 0) - desiredX) > 0.5 ||
+        Math.abs((ender.y ?? 0) - desiredY) > 0.5
+    ) {
+        LOG("move if ender", ender.id, "→", { desiredX, desiredY });
+        if (typeof api.moveBlock === "function") {
+            api.moveBlock(ender.id, desiredX, desiredY);
+        } else {
+            useBlockStore.setState((s) => ({
+                ...s,
+                blocks: s.blocks.map((b) =>
+                    b.id === ender.id ? { ...b, x: desiredX, y: desiredY } : b
+                ),
+            }));
+        }
+    }
 }
 
-function relayoutEnderForIf(state, ifBlock) {
-    const { blocks, edges, svgInfoByType, moveBlock } = state;
+/* ---------------- public API ---------------- */
 
-    const ender = blocks.find(
-        (b) => b.data?.pairWith === ifBlock.id && String(b.type).startsWith("if_branch_ender")
-    );
-    if (!ender) { LOG("no ender to reflow for if", ifBlock.id); return; }
+export function ensureIfBranchEnderOnCreate(ifId) {
+    const api = useBlockStore.getState();
+    const ifBlock = api.blocks.find((b) => b.id === ifId && b.type === "if_else");
+    if (!ifBlock) return;
+
+    IF_SNAP_COUNT.set(ifId, 0);
+    removeAllEndersFor(ifId);
+
+    const ender0 = createNumberedEnder(ifBlock, 0);
+    relayoutOne(ifBlock, ender0);
+}
+
+export function onIfBranchChildSnap(ifId) {
+    const api = useBlockStore.getState();
+    const ifBlock = api.blocks.find((b) => b.id === ifId && b.type === "if_else");
+    if (!ifBlock) return;
+
+    const current = IF_SNAP_COUNT.get(ifId) ?? 0;
+    const next = Math.min(4, current + 1); // 1..4
+    IF_SNAP_COUNT.set(ifId, next);
+    LOG("bump counter", { ifId, current, next });
+
+    // remove previous, create next, place
+    removeAllEndersFor(ifId);
+    const ender = createNumberedEnder(ifBlock, next);
+    relayoutOne(ifBlock, ender);
+}
+
+export function reflowAllIfBranchEnders() {
+    const api = useBlockStore.getState();
+    for (const ifBlock of api.blocks) {
+        if (ifBlock.type !== "if_else") continue;
+        const all = api.blocks
+            .filter(
+                (b) =>
+                    String(b.type).startsWith("if_branch_ender_") &&
+                    b.data?.pairWith === ifBlock.id
+            )
+            .sort((a, b) => variantOf(a) - variantOf(b));
+        const ender = all.length ? all[all.length - 1] : null;
+        if (!ender) continue;
+        relayoutOne(ifBlock, ender);
+    }
+}
+
+/* ---------------- placement ---------------- */
+
+function relayoutOne(ifBlock, ender) {
+    const api = useBlockStore.getState();
+    const { blocks, edges, svgInfoByType } = api;
 
     const ifInfo = svgInfoByType[ifBlock.type];
     const enderInfo = svgInfoByType[ender.type];
-    if (!ifInfo || !enderInfo) return;
+    if (!ifInfo || !enderInfo) {
+        LOG("WARN relayoutOne missing svgInfo", {
+            ifInfo: !!ifInfo,
+            enderType: ender.type,
+            enderInfo: !!enderInfo,
+        });
+        return;
+    }
 
-    const { trueHead, falseHead } = headsForIf(state, ifBlock);
+    const v = variantOf(ender);
+
+    if (v === 0) {
+        const desiredX = ifBlock.x + 120;
+        const desiredY = ifBlock.y + (ifBlock.h || 120) + 80;
+        LOG("place ender0", ender.id, "→", { desiredX, desiredY });
+        moveTo(ender, enderInfo, "true-in", { x: desiredX, y: desiredY }); // simple place via moveTo to stay consistent
+        return;
+    }
+
+    const trueHead = edges.find(
+        (e) => e.kind === "branch" && e.from === ifBlock.id && e.meta?.branch === "true"
+    )?.to;
+    const falseHead = edges.find(
+        (e) => e.kind === "branch" && e.from === ifBlock.id && e.meta?.branch === "false"
+    )?.to;
+
     const lastTrueId = lastInStack(trueHead, edges);
     const lastFalseId = lastInStack(falseHead, edges);
 
-    const trueNode = blocks.find((b) => b.id === lastTrueId) || null;
-    const falseNode = blocks.find((b) => b.id === lastFalseId) || null;
+    const trueNode = blocks.find((b) => b.id === lastTrueId) || ifBlock;
+    const falseNode = blocks.find((b) => b.id === lastFalseId) || ifBlock;
 
-    const trueInfo = trueNode ? svgInfoByType[trueNode.type] : null;
-    const falseInfo = falseNode ? svgInfoByType[falseNode.type] : null;
+    const trueInfo = svgInfoByType[trueNode.type];
+    const falseInfo = svgInfoByType[falseNode.type];
+    if (!trueInfo || !falseInfo) {
+        LOG("WARN target info missing", { trueInfo: !!trueInfo, falseInfo: !!falseInfo });
+        return;
+    }
 
-    // targets: prefer the last child's "next"; fall back to if's own "true"/"false"
-    const targetTrue = (trueNode && trueInfo && getWorldAnchor(trueNode, trueInfo, "next"))
-        || getWorldAnchor(ifBlock, ifInfo, "true");
-    const targetFalse = (falseNode && falseInfo && getWorldAnchor(falseNode, falseInfo, "next"))
-        || getWorldAnchor(ifBlock, ifInfo, "false");
+    const targetTrue =
+        getWorldAnchor(trueNode, trueInfo, "next") ||
+        getWorldAnchor(ifBlock, ifInfo, "true");
+    const targetFalse =
+        getWorldAnchor(falseNode, falseInfo, "next") ||
+        getWorldAnchor(ifBlock, ifInfo, "false");
 
-    const offT = getAnchorOffset(ender, enderInfo, "true-in");
-    const offF = getAnchorOffset(ender, enderInfo, "false-in");
+    LOG("targets", {
+        variant: v,
+        trueHead,
+        falseHead,
+        lastTrueId,
+        lastFalseId,
+        targetTrue,
+        targetFalse,
+    });
 
-    LOG("targets", { trueHead, falseHead, lastTrueId, lastFalseId, targetTrue, targetFalse });
-
-    if (!targetTrue || !targetFalse || !offT || !offF) return;
-
-    // center the ender so both inputs coincide with the two branch tails
-    const midLocal = { x: (offT.dx + offF.dx) / 2, y: (offT.dy + offF.dy) / 2 };
-    const midTarget = { x: (targetTrue.x + targetFalse.x) / 2, y: (targetTrue.y + targetFalse.y) / 2 };
-
-    const desiredX = midTarget.x - midLocal.x;
-    const desiredY = midTarget.y - midLocal.y;
-
-    LOG("move if ender", ender.id, "→", { desiredX, desiredY });
-    moveBlock(ender.id, desiredX, desiredY);
-}
-
-// ---------- public API (names used by Block.jsx) ----------
-export function ensureIfBranchEnderOnCreate(ifId, stateArg) {
-    const state = getState(stateArg);
-    const ifBlock = state.blocks.find((b) => b.id === ifId);
-    if (!ifBlock) return;
-    ensureEnderForIf(state, ifBlock, "if_branch_ender_0");
-    relayoutEnderForIf(state, ifBlock);
-}
-
-// bump visual variant and snap after a child gets attached to true/false
-export function onIfBranchChildSnap(ifId, stateArg) {
-    const state = getState(stateArg);
-    const ifBlock = state.blocks.find((b) => b.id === ifId);
-    if (!ifBlock) return;
-
-    const { edges, blocks } = state;
-    const { trueHead, falseHead } = headsForIf(state, ifBlock);
-    const countTrue = stackLength(trueHead, edges);
-    const countFalse = stackLength(falseHead, edges);
-    const longest = Math.max(countTrue, countFalse);
-
-    // After first child, we want _1 (not _0)
-    const nextType = enderTypeForCount(clamp(longest, 1, 4));
-
-    const existing = blocks.find(
-        (b) => b.data?.pairWith === ifId && String(b.type).startsWith("if_branch_ender")
-    );
-    const ender = existing
-        ? replaceEnderType(state, existing, nextType)
-        : ensureEnderForIf(state, ifBlock, nextType);
-
-    relayoutEnderForIf(state, ifBlock);
-}
-
-export function reflowAllIfBranchEnders(stateArg) {
-    const state = getState(stateArg);
-    for (const b of state.blocks) {
-        if (b.type !== "if_else") continue;
-        ensureEnderForIf(state, b, "if_branch_ender_0");
-        relayoutEnderForIf(state, b);
+    if (v === 1 || v === 3) {
+        moveTo(ender, enderInfo, "true-in", targetTrue);
+        return;
+    }
+    if (v === 2 || v === 4) {
+        moveTo(ender, enderInfo, "false-in", targetFalse);
+        return;
     }
 }

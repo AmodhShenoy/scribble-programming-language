@@ -4,29 +4,52 @@ import { Group, Image as KImage, Rect, Text as KText } from "react-konva";
 import { useBlockStore } from "../store/useBlockStore";
 import { findSnap } from "../logic/snapper";
 
-// IF branch-enders
+// IF branch enders
 import {
     ensureIfBranchEnderOnCreate,
     onIfBranchChildSnap,
     reflowAllIfBranchEnders,
 } from "../logic/branchEnders";
 
-// Repeat loop-enders (already working)
+// Repeat loop enders (unchanged)
 import {
     ensureInitialRepeatEnder,
     reflowAllRepeatEnders,
     onRepeatFalseChildSnap,
 } from "../logic/repeatEnders";
 
-function useHtmlImage(src) {
+// Helper (place near top of the file)
+function findOwningIfForNode(nodeId, edges) {
+    if (!nodeId) return null;
+    // walk back incoming stack edges to find the head of this arm
+    let head = nodeId;
+    while (true) {
+        const incoming = edges.find((e) => e.kind === "stack" && e.to === head);
+        if (!incoming) break;
+        head = incoming.from;
+    }
+    // does an IF branch feed this head?
+    const branchIn = edges.find((e) => e.kind === "branch" && e.to === head);
+    return branchIn?.from ?? null; // the IF block id or null
+}
+
+function useHtmlImage(src, typeForLog) {
     const [img, setImg] = React.useState(null);
     React.useEffect(() => {
-        if (!src) return;
+        if (!src) {
+            console.warn("[Block] missing asset url for type:", typeForLog);
+            setImg(null);
+            return;
+        }
         const im = new window.Image();
         im.onload = () => setImg(im);
+        im.onerror = () => {
+            console.warn("[Block] failed to load asset:", src, "for type:", typeForLog);
+            setImg(null);
+        };
         im.src = src;
         return () => setImg(null);
-    }, [src]);
+    }, [src, typeForLog]);
     return img;
 }
 
@@ -42,7 +65,7 @@ export default function Block(props) {
             inputs: props.inputs,
         };
 
-    const img = useHtmlImage(props.assetUrl);
+    const img = useHtmlImage(props.assetUrl, b.type);
 
     const moveBlock = useBlockStore((s) => s.moveBlock);
     const selectBlock = useBlockStore((s) => s.selectBlock);
@@ -59,22 +82,26 @@ export default function Block(props) {
     const vbw = info?.viewBox?.w || img?.naturalWidth || 128;
     const vbh = info?.viewBox?.h || img?.naturalHeight || 128;
 
-    // --- create auto-enders when blocks appear (keeps if/repeat paths separate) ---
     React.useEffect(() => {
         if (!b.w || !b.h || b.w !== vbw || b.h !== vbh) {
             registerSize(b.id, vbw, vbh);
         }
 
+        // IF: ensure ender 0 on create + reflow
         if (b.type === "if_else") {
             try { ensureIfBranchEnderOnCreate(b.id); } catch { }
-            requestAnimationFrame(() => { try { reflowAllIfBranchEnders(); } catch { } });
+            requestAnimationFrame(() => {
+                try { reflowAllIfBranchEnders(); } catch { }
+            });
         }
 
+        // REPEAT: keep as-is
         if (b.type === "repeat_until" || b.type === "repeat_times") {
             try { ensureInitialRepeatEnder(b.id); } catch { }
-            requestAnimationFrame(() => { try { reflowAllRepeatEnders(); } catch { } });
+            requestAnimationFrame(() => {
+                try { reflowAllRepeatEnders(); } catch { }
+            });
         }
-
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [b.id, vbw, vbh]);
 
@@ -106,7 +133,7 @@ export default function Block(props) {
     const nameSlotRect = React.useMemo(() => {
         const src = (dropdowns && dropdowns.name) || (slots && slots.name) || null;
         if (src) return slotLocal(src);
-        return { x: width * 0.16, y: height * 0.34, w: width * 0.3, h: Math.max(26, height * 0.18), rx: 10 };
+        return { x: width * 0.16, y: height * 0.34, w: width * 0.30, h: Math.max(26, height * 0.18), rx: 10 };
     }, [dropdowns, slots, sx, sy, width, height]);
 
     const closeDropdown = () => setOpenDropdown(null);
@@ -114,14 +141,16 @@ export default function Block(props) {
     const logicOnlyPorts = new Set(
         b.type === "if_else" ? ["condition"]
             : b.type === "repeat_until" ? ["until"]
-                : b.type === "repeat_times" ? ["times"] : []
+                : b.type === "repeat_times" ? ["times"]
+                    : []
     );
 
     return (
         <Group
             x={b.x}
             y={b.y}
-            draggable={!String(b.type).startsWith("if_branch_ender") && !String(b.type).startsWith("repeat_loop_ender")}
+            draggable={!String(b.type).startsWith("if_branch_ender") &&
+                !String(b.type).startsWith("repeat_loop_ender")}
             onClick={(e) => { e.cancelBubble = true; selectBlock(b.id); }}
             onTap={(e) => { e.cancelBubble = true; selectBlock(b.id); }}
             onContextMenu={(e) => {
@@ -130,11 +159,7 @@ export default function Block(props) {
                 selectBlock(b.id);
                 props.onShowContextMenu?.({ x: e.evt.clientX, y: e.evt.clientY }, b.id);
             }}
-            onDragStart={(e) => {
-                e.cancelBubble = true;
-                closeDropdown();
-                props.onBlockDragStart?.();
-            }}
+            onDragStart={(e) => { e.cancelBubble = true; closeDropdown(); props.onBlockDragStart?.(); }}
             onDragMove={(e) => {
                 e.cancelBubble = true;
                 const p = e.target.position();
@@ -151,7 +176,13 @@ export default function Block(props) {
                 const meNow = store.blocks.find((x) => x.id === b.id);
                 if (!meNow) { props.onBlockDragEnd?.(); return; }
 
-                const snap = findSnap(meNow, store.blocks, store.svgInfoByType, scale, { edges: store.edges });
+                const snap = findSnap(
+                    meNow,
+                    store.blocks,
+                    store.svgInfoByType,
+                    scale,
+                    { edges: store.edges }
+                );
 
                 if (snap) {
                     const nx = meNow.x + snap.dx;
@@ -163,18 +194,50 @@ export default function Block(props) {
                             const port = snap.target.port.slice("input:".length);
                             store.connectInput(snap.target.blockId, port, b.id);
                         } else {
-                            // "next" | "true" | "false" | "body" ...
-                            store.connectEdge({ fromId: snap.target.blockId, fromPort: snap.target.port, toId: b.id });
+                            // stack/branch/body connection
+                            store.connectEdge({
+                                fromId: snap.target.blockId,
+                                fromPort: snap.target.port,
+                                toId: b.id,
+                            });
 
-                            // notify the right ender system
+                            // ...inside onDragEnd, right after store.connectEdge({ ... })
                             const parent = store.blocks.find((x) => x.id === snap.target.blockId);
-                            if (parent) {
-                                if (parent.type === "if_else" && (snap.target.port === "true" || snap.target.port === "false")) {
-                                    try { onIfBranchChildSnap(parent.id); } catch { }
+
+                            // IF-arm snap: advance ender variant 1..4 and position it
+                            if (parent && parent.type === "if_else" &&
+                                (snap.target.port === "true" || snap.target.port === "false")) {
+                                try { onIfBranchChildSnap(parent.id); } catch (err) { console.error(err); }
+                            }
+
+                            // If we extended an existing arm (snapped to some child's `next`), find owning IF and bump
+                            if (snap.target.port === "next") {
+                                const owningIf = (function findOwningIfForNode(nodeId, edges) {
+                                    if (!nodeId) return null;
+                                    let head = nodeId;
+                                    while (true) {
+                                        const incoming = edges.find((e) => e.kind === "stack" && e.to === head);
+                                        if (!incoming) break;
+                                        head = incoming.from;
+                                    }
+                                    const branchIn = edges.find((e) => e.kind === "branch" && e.to === head);
+                                    return branchIn?.from ?? null;
+                                })(snap.target.blockId, store.edges);
+
+                                if (owningIf) {
+                                    requestAnimationFrame(() => {
+                                        try { onIfBranchChildSnap(owningIf); } catch { }
+                                        try { reflowAllIfBranchEnders(); } catch { }
+                                    });
                                 }
-                                if ((parent.type === "repeat_until" || parent.type === "repeat_times") && snap.target.port === "false") {
-                                    try { onRepeatFalseChildSnap(parent.id); } catch { }
-                                }
+                            }
+
+                            // REPEAT: keep current behavior
+                            if (parent && (parent.type === "repeat_until" || parent.type === "repeat_times")) {
+                                try { onRepeatFalseChildSnap(parent.id); } catch { }
+                                requestAnimationFrame(() => {
+                                    try { reflowAllRepeatEnders(); } catch { }
+                                });
                             }
                         }
                     }
@@ -182,6 +245,7 @@ export default function Block(props) {
 
                 props.onBlockDragEnd?.();
 
+                // Final reflow pass so mid-stack moves settle
                 requestAnimationFrame(() => {
                     try { reflowAllIfBranchEnders(); } catch { }
                     try { reflowAllRepeatEnders(); } catch { }
@@ -189,15 +253,27 @@ export default function Block(props) {
             }}
         >
             {/* base SVG */}
+            {/* base SVG */}
             {img ? (
                 <KImage image={img} width={width} height={height} />
             ) : (
-                <Rect width={width} height={height} fill="#eee" stroke="#999" />
+                (() => {
+                    const isAuto =
+                        String(b.type).startsWith("if_branch_ender") ||
+                        String(b.type).startsWith("repeat_loop_ender");
+                    if (!isAuto) {
+                        // eslint-disable-next-line no-console
+                        console.warn("[Block] missing asset url for type:", b.type, "Stack:", new Error().stack?.split("\n").slice(0, 3).join("\n"));
+                    }
+                    return null;
+                })()
             )}
 
-            {/* variable reporter: white text, no pill */}
+            {/* variable reporter (unchanged) */}
             {b.type === "variable" && (() => {
-                const R = (slots?.name ? slotLocal(slots.name) : null) || { x: width * 0.18, y: height * 0.32, w: width * 0.64, h: Math.max(24, height * 0.24), rx: 12 };
+                const R =
+                    (slots?.name ? slotLocal(slots.name) : null) ||
+                    { x: width * 0.18, y: height * 0.32, w: width * 0.64, h: Math.max(24, height * 0.24), rx: 12 };
                 const name = (b.inputs && b.inputs.name) || "variable";
                 return (
                     <KText
@@ -214,7 +290,7 @@ export default function Block(props) {
                 );
             })()}
 
-            {/* typable input pills */}
+            {/* typable inputs */}
             {Object.entries(slots).map(([name, slot]) => {
                 const isNameDropdownSlot = wantsVarDropdown && name === "name";
                 if (isNameDropdownSlot) return null;
@@ -263,82 +339,70 @@ export default function Block(props) {
                 );
             })}
 
-            {/* variable name dropdown */}
-            {(isVarSetter || isVarChanger) &&
-                (() => {
-                    const base = nameSlotRect;
-                    let R = { ...base, x: base.x };
-                    if (b.type === "change_variable") R = { ...base, x: base.x + 18 };
+            {/* variable dropdown (unchanged) */}
+            {(isVarSetter || isVarChanger) && (() => {
+                const base = nameSlotRect;
+                let R = { ...base, x: base.x };
+                if (b.type === "change_variable") R = { ...base, x: base.x + 18 };
 
-                    const current = ((b.inputs && b.inputs.name) || variables[0]?.name) ?? "choose…";
+                const current = (b.inputs && b.inputs.name) || (variables[0]?.name ?? "choose…");
 
-                    return (
-                        <Group>
-                            <Rect
-                                x={R.x}
-                                y={R.y}
-                                width={R.w}
-                                height={R.h}
-                                cornerRadius={R.rx}
-                                fill="#fff"
-                                stroke="rgba(0,0,0,0.35)"
-                                strokeWidth={1}
-                                onClick={(e) => {
-                                    e.cancelBubble = true;
-                                    setOpenDropdown(openDropdown ? null : "name");
-                                }}
-                            />
-                            <KText x={R.x + 10} y={R.y + Math.max(4, (R.h - 16) / 2)} text={current} fontSize={14} fill="#111" />
-                            <KText x={R.x + R.w - 18} y={R.y + Math.max(2, (R.h - 14) / 2)} text="▾" fontSize={14} fill="#555" />
+                return (
+                    <Group>
+                        <Rect
+                            x={R.x}
+                            y={R.y}
+                            width={R.w}
+                            height={R.h}
+                            cornerRadius={R.rx}
+                            fill="#fff"
+                            stroke="rgba(0,0,0,0.35)"
+                            strokeWidth={1}
+                            onClick={(e) => { e.cancelBubble = true; setOpenDropdown(openDropdown ? null : "name"); }}
+                        />
+                        <KText x={R.x + 10} y={R.y + Math.max(4, (R.h - 16) / 2)} text={current} fontSize={14} fill="#111" />
+                        <KText x={R.x + R.w - 18} y={R.y + Math.max(2, (R.h - 14) / 2)} text="▾" fontSize={14} fill="#555" />
 
-                            {openDropdown === "name" && (
-                                <Group>
-                                    <Rect
-                                        x={R.x}
-                                        y={R.y + R.h + 4}
-                                        width={Math.max(120, R.w)}
-                                        height={Math.max(28, 22 * Math.max(1, variables.length)) + 8}
-                                        cornerRadius={8}
-                                        fill="#202020"
-                                        stroke="#3a3a3a"
-                                        strokeWidth={1}
-                                        shadowColor="black"
-                                        shadowBlur={6}
-                                        shadowOpacity={0.3}
-                                    />
-                                    {variables.length === 0 ? (
-                                        <KText x={R.x + 10} y={R.y + R.h + 12} text="No variables" fontSize={13} fill="#bbb" listening={false} />
-                                    ) : (
-                                        variables.map((v, i) => (
-                                            <Group
-                                                key={v.id}
-                                                onClick={(e) => {
-                                                    e.cancelBubble = true;
-                                                    setInputValue(b.id, "name", v.name);
-                                                    setOpenDropdown(null);
-                                                }}
-                                            >
-                                                <Rect x={R.x + 4} y={R.y + R.h + 8 + i * 22} width={Math.max(112, R.w - 8)} height={20} cornerRadius={6} fill="#2a2a2a" stroke="rgba(255,255,255,0.06)" />
-                                                <KText x={R.x + 12} y={R.y + R.h + 10 + i * 22} text={v.name} fontSize={13} fill="#eaeaea" />
-                                            </Group>
-                                        ))
-                                    )}
-                                </Group>
-                            )}
-                        </Group>
-                    );
-                })()}
+                        {openDropdown === "name" && (
+                            <Group>
+                                <Rect
+                                    x={R.x}
+                                    y={R.y + R.h + 4}
+                                    width={Math.max(120, R.w)}
+                                    height={Math.max(28, 22 * Math.max(1, variables.length)) + 8}
+                                    cornerRadius={8}
+                                    fill="#202020"
+                                    stroke="#3a3a3a"
+                                    strokeWidth={1}
+                                    shadowColor="black"
+                                    shadowBlur={6}
+                                    shadowOpacity={0.3}
+                                />
+                                {variables.length === 0 ? (
+                                    <KText x={R.x + 10} y={R.y + R.h + 12} text="No variables" fontSize={13} fill="#bbb" listening={false} />
+                                ) : (
+                                    variables.map((v, i) => (
+                                        <Group key={v.id} onClick={(e) => {
+                                            e.cancelBubble = true;
+                                            setInputValue(b.id, "name", v.name);
+                                            setOpenDropdown(null);
+                                        }}>
+                                            <Rect x={R.x + 4} y={R.y + R.h + 8 + i * 22} width={Math.max(112, R.w - 8)} height={20}
+                                                cornerRadius={6} fill="#2a2a2a" stroke="rgba(255,255,255,0.06)" />
+                                            <KText x={R.x + 12} y={R.y + R.h + 10 + i * 22} text={v.name} fontSize={13} fill="#eaeaea" />
+                                        </Group>
+                                    ))
+                                )}
+                            </Group>
+                        )}
+                    </Group>
+                );
+            })()}
 
             {isSelected && (
                 <Rect
-                    x={-6}
-                    y={-6}
-                    width={width + 12}
-                    height={height + 12}
-                    stroke="#6ad3ff"
-                    strokeWidth={2}
-                    cornerRadius={8}
-                    listening={false}
+                    x={-6} y={-6} width={width + 12} height={height + 12}
+                    stroke="#6ad3ff" strokeWidth={2} cornerRadius={8} listening={false}
                 />
             )}
         </Group>

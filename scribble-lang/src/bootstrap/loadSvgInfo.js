@@ -4,31 +4,11 @@ import { ensureSvgInfo } from "../logic/svgInfoCache";
 import { useBlockStore } from "../store/useBlockStore";
 
 export const ASSET_URLS = {
+    // core
     start: "/blocks/start.svg",
     stop: "/blocks/stop.svg",
     say: "/blocks/say.svg",
     think: "/blocks/think.svg",
-    repeat_until: "/blocks/repeat_until.svg",
-    repeat_times: "/blocks/repeat_times.svg",
-    // if + enders
-    if_else: "/blocks/if_else.svg",
-    if_branch_ender_0: "/blocks/if_branch_ender_0.svg",
-    if_branch_ender_1: "/blocks/if_branch_ender_1.svg",
-    if_branch_ender_2: "/blocks/if_branch_ender_2.svg",
-    if_branch_ender_3: "/blocks/if_branch_ender_3.svg",
-    if_branch_ender_4: "/blocks/if_branch_ender_4.svg",
-
-    // repeat + enders
-    repeat_until: "/blocks/repeat_until.svg",
-    repeat_times: "/blocks/repeat_times.svg",
-    repeat_loop_ender_0: "/blocks/repeat_loop_ender_0.svg",
-    repeat_loop_ender_1: "/blocks/repeat_loop_ender_1.svg",
-    repeat_loop_ender_2: "/blocks/repeat_loop_ender_2.svg",
-    repeat_loop_ender_3: "/blocks/repeat_loop_ender_3.svg",
-    repeat_loop_ender_4: "/blocks/repeat_loop_ender_4.svg",
-    repeat_loop_ender_5: "/blocks/repeat_loop_ender_5.svg",
-    repeat_loop_ender_6: "/blocks/repeat_loop_ender_6.svg",
-    repeat_loop_ender_7: "/blocks/repeat_loop_ender_7.svg",
     go_to: "/blocks/go_to.svg",
     move: "/blocks/move.svg",
     change_x_by: "/blocks/change_x_by.svg",
@@ -38,9 +18,13 @@ export const ASSET_URLS = {
     turn_clockwise: "/blocks/turn_clockwise.svg",
     turn_anticlockwise: "/blocks/turn_anticlockwise.svg",
     point_in: "/blocks/point_in.svg",
+
+    // variables
     set_variable: "/blocks/set_variable.svg",
     change_variable: "/blocks/change_variable.svg",
     variable: "/blocks/variable.svg",
+
+    // operators
     plus_operator: "/blocks/plus_operator.svg",
     minus_operator: "/blocks/minus_operator.svg",
     multiply_operator: "/blocks/multiply_operator.svg",
@@ -54,6 +38,27 @@ export const ASSET_URLS = {
     and_operator: "/blocks/and_operator.svg",
     or_operator: "/blocks/or_operator.svg",
     not_operator: "/blocks/not_operator.svg",
+
+    // control
+    if_else: "/blocks/if_else.svg",
+    // IMPORTANT: only numbered IF enders — NO base if_branch_ender !
+    if_branch_ender_0: "/blocks/if_branch_ender_0.svg",
+    if_branch_ender_1: "/blocks/if_branch_ender_1.svg",
+    if_branch_ender_2: "/blocks/if_branch_ender_2.svg",
+    if_branch_ender_3: "/blocks/if_branch_ender_3.svg",
+    if_branch_ender_4: "/blocks/if_branch_ender_4.svg",
+
+    repeat_until: "/blocks/repeat_until.svg",
+    repeat_times: "/blocks/repeat_times.svg",
+    // ONLY numbered repeat loop enders — NO base repeat_loop_ender !
+    repeat_loop_ender_0: "/blocks/repeat_loop_ender_0.svg",
+    repeat_loop_ender_1: "/blocks/repeat_loop_ender_1.svg",
+    repeat_loop_ender_2: "/blocks/repeat_loop_ender_2.svg",
+    repeat_loop_ender_3: "/blocks/repeat_loop_ender_3.svg",
+    repeat_loop_ender_4: "/blocks/repeat_loop_ender_4.svg",
+    repeat_loop_ender_5: "/blocks/repeat_loop_ender_5.svg",
+    repeat_loop_ender_6: "/blocks/repeat_loop_ender_6.svg",
+    repeat_loop_ender_7: "/blocks/repeat_loop_ender_7.svg",
 };
 
 export function getAssetUrl(type) {
