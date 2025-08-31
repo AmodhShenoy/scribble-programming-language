@@ -4,7 +4,7 @@ import BlockPalette from "./components/BlockPalette";
 import CanvasStage from "./components/CanvasStage";
 import { preloadSvgInfo } from "./bootstrap/loadSvgInfo";
 import DebugDock from "./components/DebugDock";
-import RunnerPanel from "./runtime/RunnerPanel"; // ✅ add
+import RunnerPanel from "./runtime/RunnerPanel"; // keep if you're already using it
 
 export default function App() {
   // Prevent duplicate preload in Strict Mode / HMR
@@ -18,17 +18,21 @@ export default function App() {
     });
   }, []);
 
+  // ⬅️ Adjust this to control the horizontal scrollable width of your canvas
+  const CANVAS_WORLD_WIDTH = 3200; // px
+
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "220px 1fr", // ✅ unchanged
+        gridTemplateColumns: "220px 1fr 380px", // palette | canvas | runner
         gridTemplateRows: "100vh",
         width: "100vw",
         height: "100vh",
         overflow: "hidden",
       }}
     >
+      {/* Left menu (unchanged) */}
       <aside
         style={{
           borderRight: "1px solid #eee",
@@ -41,16 +45,31 @@ export default function App() {
         <BlockPalette />
       </aside>
 
-      {/* ✅ split main into canvas (flex:1) + runner (fixed width in component) */}
-      <main style={{ position: "relative", overflow: "hidden", display: "flex" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <CanvasStage />
+      {/* Main canvas area with ONLY horizontal scroll */}
+      <main style={{ position: "relative", overflow: "hidden" }}>
+        {/* Scroll container provides a horizontal scrollbar just for the canvas */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            overflowX: "auto",
+            overflowY: "hidden",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
+          {/* This inner track defines how far you can scroll horizontally */}
+          <div style={{ width: CANVAS_WORLD_WIDTH, height: "100%" }}>
+            {/* CanvasStage will size to this inner container width */}
+            <CanvasStage />
+          </div>
         </div>
-        <RunnerPanel />
       </main>
 
+      {/* Right-side runner panel (unchanged) */}
+      <RunnerPanel />
+
+      {/* Debug dock (unchanged) */}
       <>
-        {/* ...your palette + canvas... */}
         <DebugDock />
       </>
     </div>

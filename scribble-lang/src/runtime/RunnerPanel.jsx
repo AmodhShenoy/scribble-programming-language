@@ -5,7 +5,7 @@ import { useBlockStore } from "../store/useBlockStore";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** ── Config (edit these values as you like) ────────────────────────────── */
-const EXEC_DELAY_MS = 300;   // delay between executed blocks (ms)
+const EXEC_DELAY_MS = 3000;   // delay between executed blocks (ms)
 const STEP_SCALE = 10;       // 1 "step" = 10 px (screen distance)
 /** ─────────────────────────────────────────────────────────────────────── */
 
