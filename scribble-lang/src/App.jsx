@@ -4,6 +4,7 @@ import BlockPalette from "./components/BlockPalette";
 import CanvasStage from "./components/CanvasStage";
 import { preloadSvgInfo } from "./bootstrap/loadSvgInfo";
 import DebugDock from "./components/DebugDock";
+import RunnerPanel from "./runtime/RunnerPanel"; // ✅ add
 
 export default function App() {
   // Prevent duplicate preload in Strict Mode / HMR
@@ -21,7 +22,7 @@ export default function App() {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "220px 1fr",
+        gridTemplateColumns: "220px 1fr", // ✅ unchanged
         gridTemplateRows: "100vh",
         width: "100vw",
         height: "100vh",
@@ -40,9 +41,14 @@ export default function App() {
         <BlockPalette />
       </aside>
 
-      <main style={{ position: "relative", overflow: "hidden" }}>
-        <CanvasStage />
+      {/* ✅ split main into canvas (flex:1) + runner (fixed width in component) */}
+      <main style={{ position: "relative", overflow: "hidden", display: "flex" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <CanvasStage />
+        </div>
+        <RunnerPanel />
       </main>
+
       <>
         {/* ...your palette + canvas... */}
         <DebugDock />
