@@ -1,7 +1,13 @@
 // src/components/BlockPalette.jsx
 import React from "react";
 import { useBlockStore } from "../store/useBlockStore";
-import { getAssetUrl } from "../bootstrap/loadSvgInfo";
+import { getAssetUrl, getMenuAssetUrl, CATEGORY_BY_TYPE } from "../bootstrap/loadSvgInfo";
+
+/** ── TWEAK HERE ─────────────────────────────────────────────── */
+const PALETTE_WIDTH = 220;   // overall left panel width (also controlled by App.jsx grid)
+const TILE_HEIGHT = 84;      // regular tile height (was 56)
+const VAR_TILE_HEIGHT = 90;  // variable tile height (was 60)
+/** ───────────────────────────────────────────────────────────── */
 
 function uid(prefix = "") {
     return (
@@ -11,10 +17,30 @@ function uid(prefix = "") {
     );
 }
 
-// classify helpers
-const isOperator = (t) =>
-    t.endsWith("_operator") ||
-    [
+const isInternal = (t) =>
+    t.startsWith("if_branch_ender") ||
+    t.startsWith("repeat_loop_ender") ||
+    t.startsWith("branch_ender") ||
+    t.startsWith("loop_ender");
+
+// Order categories in the palette
+const CATEGORY_ORDER = ["event", "motion", "action", "control", "operator", "variable"];
+
+// Optional pinned order inside some categories
+const PINNED_BY_CATEGORY = {
+    event: ["start", "stop"],
+    motion: [
+        "move",
+        "change_x_by",
+        "change_y_by",
+        "turn_anticlockwise",
+        "turn_clockwise",
+        "point_in",
+        "go_to",
+    ],
+    action: ["say", "think", "wait", "clear"],
+    control: ["if_else", "repeat_until", "repeat_times"],
+    operator: [
         "plus_operator",
         "minus_operator",
         "multiply_operator",
@@ -30,35 +56,9 @@ const isOperator = (t) =>
         "or_operator",
         "not_operator",
         "et_operator",
-    ].includes(t);
-
-const isInternal = (t) =>
-    t.startsWith("if_branch_ender") ||
-    t.startsWith("repeat_loop_ender") ||
-    t.startsWith("branch_ender") ||
-    t.startsWith("loop_ender");
-
-const isVariableReporter = (t) => t === "variable";
-const isVariableStmt = (t) => t === "set_variable" || t === "change_variable";
-
-// Optional: show some common actions first, then the rest alphabetically
-const PINNED_ACTION_ORDER = [
-    "start",
-    "stop",
-    "say",
-    "think",
-    "wait",
-    "go_to",
-    "move",
-    "change_x_by",
-    "change_y_by",
-    "turn_anticlockwise",
-    "turn_clockwise",
-    "point_in",
-    "if_else",
-    "repeat_until",
-    "repeat_times",
-];
+    ],
+    variable: ["set_variable", "change_variable", "variable"],
+};
 
 export default function BlockPalette() {
     const addBlock = useBlockStore((s) => s.addBlock);
@@ -66,56 +66,36 @@ export default function BlockPalette() {
     const variables = useBlockStore((s) => s.variables ?? []);
     const createVariable = useBlockStore((s) => s.createVariable);
 
-    // All known types from what’s actually loaded/registered
     const allTypes = React.useMemo(
-        () => Object.keys(svgInfoByType || {}),
+        () => Object.keys(svgInfoByType || {}).filter((t) => !isInternal(t)),
         [svgInfoByType]
     );
 
-    // Filter into groups
-    const operatorTypes = React.useMemo(
-        () => allTypes.filter((t) => isOperator(t) && !isInternal(t)).sort(),
-        [allTypes]
-    );
-
-    const variableStmtTypes = React.useMemo(
-        () =>
-            allTypes
-                .filter((t) => isVariableStmt(t))
-                .sort((a, b) => (a === "set_variable" ? -1 : 1)),
-        [allTypes]
-    );
-
-    const variableReporterAvailable = allTypes.some(isVariableReporter);
-
-    const actionTypes = React.useMemo(() => {
-        const raw = allTypes.filter(
-            (t) =>
-                !isInternal(t) &&
-                !isOperator(t) &&
-                !isVariableReporter(t) &&
-                !isVariableStmt(t)
-        );
-        // Sort with pinned first, then alphabetical for the rest
-        const weight = (t) => {
-            const i = PINNED_ACTION_ORDER.indexOf(t);
-            return i === -1 ? 1000 : i; // big number if not pinned
-        };
-        return [
-            ...raw
-                .filter((t) => PINNED_ACTION_ORDER.includes(t))
-                .sort((a, b) => weight(a) - weight(b)),
-            ...raw
-                .filter((t) => !PINNED_ACTION_ORDER.includes(t))
-                .sort((a, b) => a.localeCompare(b)),
-        ];
+    const byCategory = React.useMemo(() => {
+        const m = new Map();
+        for (const t of allTypes) {
+            const cat = CATEGORY_BY_TYPE[t] || "action";
+            if (!m.has(cat)) m.set(cat, []);
+            m.get(cat).push(t);
+        }
+        for (const cat of m.keys()) {
+            const list = m.get(cat);
+            const pinned = PINNED_BY_CATEGORY[cat] || [];
+            const weight = (x) => {
+                const i = pinned.indexOf(x);
+                return i === -1 ? 1000 + x.localeCompare("") : i;
+            };
+            list.sort((a, b) => weight(a) - weight(b) || a.localeCompare(b));
+            m.set(cat, list);
+        }
+        return m;
     }, [allTypes]);
 
     const hasVars = variables.length > 0;
     const firstVarName = hasVars ? variables[0].name : "";
 
     const add = (type, extra = {}) => {
-        const assetUrl = getAssetUrl(type);
+        const assetUrl = getAssetUrl(type); // runtime svg on canvas
         addBlock({
             id: uid("b_"),
             type,
@@ -129,8 +109,7 @@ export default function BlockPalette() {
     const onCreateVariable = () => {
         const name = window.prompt('Enter a variable name (e.g. "score"):');
         if (!name) return;
-        const rawInit =
-            window.prompt(`Initial value for "${name}"? (blank = 0)`) ?? "";
+        const rawInit = window.prompt(`Initial value for "${name}"? (blank = 0)`) ?? "";
         const n = Number(rawInit);
         const init = Number.isFinite(n) ? n : rawInit;
         createVariable(name, init);
@@ -139,7 +118,7 @@ export default function BlockPalette() {
     return (
         <aside
             style={{
-                width: 220,
+                width: PALETTE_WIDTH,
                 height: "100vh",
                 overflowY: "auto",
                 background: "#141414",
@@ -149,94 +128,81 @@ export default function BlockPalette() {
                 boxSizing: "border-box",
             }}
         >
-            <Section title="Actions">
-                <TileRow items={actionTypes} onAdd={add} />
-            </Section>
-
-            <Section title="Operators">
-                <TileRow items={operatorTypes} onAdd={add} />
-            </Section>
-
-            <Section
-                title="Variables"
-                extra={
-                    <button
-                        onClick={onCreateVariable}
-                        style={{
-                            background: "#2a88ff",
-                            color: "white",
-                            border: 0,
-                            borderRadius: 6,
-                            padding: "6px 10px",
-                            cursor: "pointer",
-                        }}
-                    >
-                        Create variable
-                    </button>
-                }
-            >
-                {!hasVars ? (
-                    <p style={{ opacity: 0.6, margin: "6px 0 0 2px" }}>
-                        No variables yet. Create one to unlock variable blocks.
-                    </p>
-                ) : (
-                    <>
-                        {/* show set/change (if you’ve provided those SVGs) */}
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-                            {variableStmtTypes.includes("set_variable") && (
-                                <Tile
-                                    type="set_variable"
-                                    label="set"
-                                    onClick={() =>
-                                        add("set_variable", { inputs: { name: firstVarName, value: 0 } })
-                                    }
-                                />
-                            )}
-                            {variableStmtTypes.includes("change_variable") && (
-                                <Tile
-                                    type="change_variable"
-                                    label="change"
-                                    onClick={() =>
-                                        add("change_variable", {
-                                            inputs: { name: firstVarName, delta: 1 },
-                                        })
-                                    }
-                                />
-                            )}
-                        </div>
-
-                        {/* one reporter tile per created variable */}
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                            {variables.map((v) =>
-                                variableReporterAvailable ? (
-                                    <VariableTile
-                                        key={v.id}
-                                        varName={v.name}
-                                        onClick={() =>
-                                            add("variable", { inputs: { name: v.name } })
+            {CATEGORY_ORDER.map((cat) => {
+                const items = byCategory.get(cat) || [];
+                if (cat === "variable") {
+                    return (
+                        <Section
+                            key={cat}
+                            title="Variables"
+                            extra={
+                                <button
+                                    onClick={onCreateVariable}
+                                    style={{
+                                        background: "#2a88ff",
+                                        color: "white",
+                                        border: 0,
+                                        borderRadius: 6,
+                                        padding: "6px 10px",
+                                        cursor: "pointer",
+                                    }}
+                                >
+                                    Create variable
+                                </button>
+                            }
+                        >
+                            {!hasVars ? (
+                                <p style={{ opacity: 0.6, margin: "6px 0 0 2px" }}>
+                                    No variables yet. Create one to unlock variable blocks.
+                                </p>
+                            ) : (
+                                <>
+                                    <TileColumn
+                                        items={items.filter((t) => t !== "variable")}
+                                        onAdd={(t) =>
+                                            add(t, {
+                                                inputs:
+                                                    t === "set_variable"
+                                                        ? { name: firstVarName, value: 0 }
+                                                        : { name: firstVarName, delta: 1 },
+                                            })
                                         }
                                     />
-                                ) : (
-                                    <button
-                                        key={v.id}
-                                        onClick={() => add("variable", { inputs: { name: v.name } })}
-                                        style={{
-                                            border: "1px dashed #444",
-                                            borderRadius: 8,
-                                            padding: "6px 8px",
-                                            background: "transparent",
-                                            color: "#bbb",
-                                            cursor: "pointer",
-                                        }}
-                                    >
-                                        {v.name}
-                                    </button>
-                                )
+                                    {/* one reporter tile per created variable */}
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                        {variables.map((v) => (
+                                            <VariableTile
+                                                key={v.id}
+                                                varName={v.name}
+                                                onClick={() => add("variable", { inputs: { name: v.name } })}
+                                            />
+                                        ))}
+                                    </div>
+                                </>
                             )}
-                        </div>
-                    </>
-                )}
-            </Section>
+                        </Section>
+                    );
+                }
+
+                const title =
+                    cat === "event"
+                        ? "Events"
+                        : cat === "motion"
+                            ? "Motion"
+                            : cat === "action"
+                                ? "Actions"
+                                : cat === "control"
+                                    ? "Control"
+                                    : cat === "operator"
+                                        ? "Operators"
+                                        : "Other";
+
+                return (
+                    <Section key={cat} title={title}>
+                        <TileColumn items={items} onAdd={add} />
+                    </Section>
+                );
+            })}
         </aside>
     );
 }
@@ -264,9 +230,10 @@ function Section({ title, children, extra }) {
     );
 }
 
-function TileRow({ items, onAdd }) {
+// One full-width tile per row
+function TileColumn({ items, onAdd }) {
     return (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {items.map((type) => (
                 <Tile key={type} type={type} onClick={() => onAdd(type)} />
             ))}
@@ -275,14 +242,14 @@ function TileRow({ items, onAdd }) {
 }
 
 function Tile({ type, onClick, label }) {
-    const url = getAssetUrl(type);
+    const url = getMenuAssetUrl(type);
     return (
         <button
             onClick={onClick}
             title={label || type}
             style={{
-                width: 88,
-                height: 54,
+                width: "100%",
+                height: TILE_HEIGHT,       // <── tweak with TILE_HEIGHT
                 padding: 0,
                 border: "1px solid #2b2b2b",
                 borderRadius: 10,
@@ -300,15 +267,14 @@ function Tile({ type, onClick, label }) {
                     height: "100%",
                     objectFit: "contain",
                     display: "block",
-                    filter: "drop-shadow(0 0 0 rgba(0,0,0,0))",
                 }}
             />
             {label && (
                 <div
                     style={{
                         position: "absolute",
-                        left: 6,
-                        top: 6,
+                        left: 8,
+                        top: 8,
                         fontSize: 11,
                         color: "#bbb",
                         pointerEvents: "none",
@@ -322,14 +288,14 @@ function Tile({ type, onClick, label }) {
 }
 
 function VariableTile({ varName, onClick }) {
-    const url = getAssetUrl("variable");
+    const url = getMenuAssetUrl("variable");
     return (
         <button
             onClick={onClick}
             title={varName}
             style={{
-                width: 112,
-                height: 60,
+                width: "100%",
+                height: VAR_TILE_HEIGHT,   // <── tweak with VAR_TILE_HEIGHT
                 padding: 0,
                 border: "1px solid #2b2b2b",
                 borderRadius: 10,
