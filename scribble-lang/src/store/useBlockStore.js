@@ -12,6 +12,9 @@ export const useBlockStore = create(
             selectedId: null,
             svgInfoByType: {},      // parsed anchors, inputs, viewBox per block type
             endersByIf: {},         // map: if_else.id -> branch ender id
+            executingId: null,
+
+            setExecutingId: (id) => set({ executingId: id }),
 
             // --------------- blocks ----------------
             createVariable: (name, initialValue = 0) =>

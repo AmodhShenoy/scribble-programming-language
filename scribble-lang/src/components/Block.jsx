@@ -51,6 +51,7 @@ export default function Block(props) {
     const moveBlock = useBlockStore((s) => s.moveBlock);
     const selectBlock = useBlockStore((s) => s.selectBlock);
     const selectedId = useBlockStore((s) => s.selectedId);
+    const executingId = useBlockStore((s) => s.executingId); // 👈 NEW (read-only)
     const edges = useBlockStore((s) => s.edges);
     const svgInfoByType = useBlockStore((s) => s.svgInfoByType);
     const registerSize = useBlockStore((s) => s.registerSize);
@@ -92,6 +93,7 @@ export default function Block(props) {
     const width = b.w ?? vbw;
     const height = b.h ?? vbh;
     const isSelected = selectedId === b.id;
+    const isExecuting = executingId === b.id; // 👈 NEW
 
     const sx = width / vbw;
     const sy = height / vbh;
@@ -246,6 +248,24 @@ export default function Block(props) {
                 <Group listening={false} />
             )}
 
+            {/* 🔸 Executing highlight (non-intrusive overlay) */}
+            {isExecuting && (
+                <Rect
+                    x={-8}
+                    y={-8}
+                    width={width + 16}
+                    height={height + 16}
+                    stroke="#ffcc00"
+                    strokeWidth={3}
+                    cornerRadius={10}
+                    dash={[6, 4]}
+                    listening={false}
+                    shadowColor="#ffcc00"
+                    shadowBlur={6}
+                    shadowOpacity={0.8}
+                />
+            )}
+
             {/* variable reporter: white text, no pill */}
             {b.type === "variable" &&
                 (() => {
@@ -268,9 +288,7 @@ export default function Block(props) {
                     );
                 })()}
 
-            {/* Typable + snappable input pills (render both a & b when present).
-          Size exactly to each group's "box" from SVG metadata.
-      */}
+            {/* Typable + snappable input pills (render both a & b when present) */}
             {Object.entries(slots).map(([rawName, slot]) => {
                 const name = norm(rawName);
                 const isNameDropdownSlot = wantsVarDropdown && name === "name";
@@ -278,7 +296,7 @@ export default function Block(props) {
                 if (logicOnlyPorts.has(name)) return null;
 
                 const R = slotLocal(slot);
-                const conn = getInputConnection(rawName); // meta.port stored normalized
+                const conn = getInputConnection(rawName);
                 const typed = (b.inputs && b.inputs[name]) || "";
                 const showOverlay = !conn;
 
@@ -290,7 +308,7 @@ export default function Block(props) {
                                 y={R.y}
                                 width={R.w}
                                 height={R.h}
-                                cornerRadius={Math.max(12, (R.rx ?? 8) * 1.4)} // rounded corners
+                                cornerRadius={Math.max(12, (R.rx ?? 8) * 1.4)}
                                 fill="#ffffff"
                                 opacity={1}
                                 stroke="rgba(0,0,0,0.35)"
@@ -418,6 +436,7 @@ export default function Block(props) {
                     );
                 })()}
 
+            {/* selection outline (unchanged) */}
             {isSelected && (
                 <Rect
                     x={-6}

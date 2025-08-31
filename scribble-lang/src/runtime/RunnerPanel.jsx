@@ -6,7 +6,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** ── Config (edit these values as you like) ────────────────────────────── */
 const EXEC_DELAY_MS = 300;   // delay between executed blocks (ms)
-const STEP_SCALE = 10;    // 1 "step" = 10 px (screen distance)
+const STEP_SCALE = 10;       // 1 "step" = 10 px (screen distance)
 /** ─────────────────────────────────────────────────────────────────────── */
 
 export default function RunnerPanel() {
@@ -66,17 +66,16 @@ export default function RunnerPanel() {
         )?.to || null;
 
     const blockById = (blocks, id) => blocks.find((b) => b.id === id) || null;
-    const svgInfoOf = (svgInfoByType, type) => svgInfoByType[type] || null;
 
     // evaluate a reporter (operators/variable/typed inputs)
-    async function evalPort(blocks, edges, svgInfoByType, blockId, port) {
+    async function evalPort(blocks, edges, _svgInfoByType, blockId, port) {
         const b = blockById(blocks, blockId);
         if (!b) return null;
 
         // 1) does this port have a connected reporter?
         const child = inputTo(edges, blockId, port);
         if (child) {
-            return await evalReporter(blocks, edges, svgInfoByType, child);
+            return await evalReporter(blocks, edges, child);
         }
 
         // 2) fall back to typed value in the block itself
@@ -86,7 +85,7 @@ export default function RunnerPanel() {
         return Number.isFinite(n) && String(val).trim() !== "" ? n : String(val);
     }
 
-    async function evalReporter(blocks, edges, svgInfoByType, id) {
+    async function evalReporter(blocks, edges, id) {
         const b = blockById(blocks, id);
         if (!b) return null;
 
@@ -108,8 +107,8 @@ export default function RunnerPanel() {
             "mod_operator",
         ]);
         if (math2.has(b.type)) {
-            const a = Number(await evalPort(blocks, edges, svgInfoByType, id, "a") ?? 0);
-            const c = Number(await evalPort(blocks, edges, svgInfoByType, id, "b") ?? 0);
+            const a = Number(await evalPort(blocks, edges, null, id, "a") ?? 0);
+            const c = Number(await evalPort(blocks, edges, null, id, "b") ?? 0);
             switch (b.type) {
                 case "plus_operator": return a + c;
                 case "minus_operator": return a - c;
@@ -129,8 +128,8 @@ export default function RunnerPanel() {
             "et_operator", // equals
         ]);
         if (cmp2.has(b.type)) {
-            const a = await evalPort(blocks, edges, svgInfoByType, id, "a");
-            const c = await evalPort(blocks, edges, svgInfoByType, id, "b");
+            const a = await evalPort(blocks, edges, null, id, "a");
+            const c = await evalPort(blocks, edges, null, id, "b");
             switch (b.type) {
                 case "gt_operator": return Number(a) > Number(c);
                 case "gte_operator": return Number(a) >= Number(c);
@@ -143,12 +142,12 @@ export default function RunnerPanel() {
 
         // logical
         if (b.type === "and_operator" || b.type === "or_operator") {
-            const a = Boolean(await evalPort(blocks, edges, svgInfoByType, id, "a"));
-            const c = Boolean(await evalPort(blocks, edges, svgInfoByType, id, "b"));
+            const a = Boolean(await evalPort(blocks, edges, null, id, "a"));
+            const c = Boolean(await evalPort(blocks, edges, null, id, "b"));
             return b.type === "and_operator" ? a && c : a || c;
         }
         if (b.type === "not_operator") {
-            const a = Boolean(await evalPort(blocks, edges, svgInfoByType, id, "a"));
+            const a = Boolean(await evalPort(blocks, edges, null, id, "a"));
             return !a;
         }
 
@@ -170,16 +169,13 @@ export default function RunnerPanel() {
 
     const cmdMove = React.useCallback(
         async (distance) => {
-            // Apply step scaling so "1" step is larger on screen
             const dist = (Number(distance) || 0) * STEP_SCALE;
-
-            // Convert CSS heading (cw positive) to math radians (ccw positive)
-            const rad = (-sprite.dir) * (Math.PI / 180);
+            const rad = (-sprite.dir) * (Math.PI / 180); // anticlockwise-positive math angle
             const dx = dist * Math.cos(rad);
             const dy = dist * Math.sin(rad);
 
             setSprite((s) => {
-                const spriteSize = 64; // rough sprite footprint for clamping
+                const spriteSize = 64;
                 const maxX = Math.max(0, stageSize.w - spriteSize);
                 const maxY = Math.max(0, stageSize.h - spriteSize);
                 const nx = Math.max(0, Math.min(maxX, s.x + dx));
@@ -197,54 +193,61 @@ export default function RunnerPanel() {
     }, []);
 
     // ---------- execution primitives ----------
-    async function runStackFrom(blocks, edges, svgInfoByType, headId, haltRef) {
+    async function runStackFrom(blocks, edges, headId, haltRef) {
         let cur = headId;
         let safety = 5000;
         while (cur && !haltRef.current && safety-- > 0) {
-            cur = await execSingle(blocks, edges, svgInfoByType, cur, haltRef);
+            cur = await execSingle(blocks, edges, cur, haltRef);
         }
     }
 
-    async function execSingle(blocks, edges, svgInfoByType, curId, haltRef) {
-        const b = blockById(blocks, curId);
-        if (!b) return null;
+    async function execSingle(blocks, edges, curId, haltRef) {
+        const api = useBlockStore.getState();        // 👈 access once per step
+        api.setExecutingId?.(curId);                 // 👈 highlight this block
+
+        const b = blocks.find((x) => x.id === curId);
+        if (!b) {
+            api.setExecutingId?.(null);
+            return null;
+        }
 
         // STOP: end entire program
         if (b.type === "stop") {
             haltRef.current = true;
+            api.setExecutingId?.(null);
             return null;
         }
 
         // SAY / THINK
         if (b.type === "say") {
-            const msg =
-                (await evalPort(blocks, edges, svgInfoByType, b.id, "value")) ?? "";
+            const msg = (await evalPort(blocks, edges, null, b.id, "value")) ?? "";
             await cmdSay(msg, false);
             await sleep(stepDelayMs);
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
         if (b.type === "think") {
-            const msg =
-                (await evalPort(blocks, edges, svgInfoByType, b.id, "value")) ?? "";
+            const msg = (await evalPort(blocks, edges, null, b.id, "value")) ?? "";
             await cmdSay(msg, true);
             await sleep(stepDelayMs);
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
 
         // MOVE / TURN
         if (b.type === "move") {
-            const dist =
-                (await evalPort(blocks, edges, svgInfoByType, b.id, "value")) ?? 0;
+            const dist = (await evalPort(blocks, edges, null, b.id, "value")) ?? 0;
             await cmdMove(dist);
             await sleep(stepDelayMs);
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
         if (b.type === "turn_anticlockwise") {
-            const deg =
-                (await evalPort(blocks, edges, svgInfoByType, b.id, "value")) ?? 0;
+            const deg = (await evalPort(blocks, edges, null, b.id, "value")) ?? 0;
             await cmdTurnACW(deg);
             await sleep(stepDelayMs);
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
 
         // SET / CHANGE VARIABLE
@@ -253,69 +256,72 @@ export default function RunnerPanel() {
                 (b.inputs && b.inputs.name) ||
                 useBlockStore.getState().variables?.[0]?.name ||
                 "var";
-            const value =
-                (await evalPort(blocks, edges, svgInfoByType, b.id, "value")) ?? 0;
-            runtimeVarsRef.current[name] = Number(value);
-            appendLog(`>> ${name} = ${runtimeVarsRef.current[name]}`);
+            const value = (await evalPort(blocks, edges, null, b.id, "value")) ?? 0;
+            const rv = runtimeVarsRef.current;
+            rv[name] = Number(value);
+            appendLog(`>> ${name} = ${rv[name]}`);
             await sleep(stepDelayMs);
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
         if (b.type === "change_variable") {
             const name =
                 (b.inputs && b.inputs.name) ||
                 useBlockStore.getState().variables?.[0]?.name ||
                 "var";
-            const delta =
-                (await evalPort(blocks, edges, svgInfoByType, b.id, "value")) ?? 0;
-            const cur = Number(runtimeVarsRef.current[name] ?? 0);
-            runtimeVarsRef.current[name] = cur + Number(delta);
-            appendLog(`>> ${name} += ${Number(delta)}  → ${runtimeVarsRef.current[name]}`);
+            const delta = (await evalPort(blocks, edges, null, b.id, "value")) ?? 0;
+            const rv = runtimeVarsRef.current;
+            rv[name] = Number(rv[name] ?? 0) + Number(delta);
+            appendLog(`>> ${name} += ${Number(delta)}  → ${rv[name]}`);
             await sleep(stepDelayMs);
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
 
         // IF / ELSE
         if (b.type === "if_else") {
-            const cond =
-                (await evalPort(blocks, edges, svgInfoByType, b.id, "condition")) ?? false;
+            const cond = (await evalPort(blocks, edges, null, b.id, "condition")) ?? false;
 
-            const headTrue = branchHead(edges, b.id, "true");
-            const headFalse = branchHead(edges, b.id, "false");
+            const headTrue = edges.find((e) => e.kind === "branch" && e.from === b.id && e.meta?.branch === "true")?.to || null;
+            const headFalse = edges.find((e) => e.kind === "branch" && e.from === b.id && e.meta?.branch === "false")?.to || null;
 
             if (cond) {
-                await runStackFrom(blocks, edges, svgInfoByType, headTrue, haltRef);
+                await runStackFrom(blocks, edges, headTrue, haltRef);
             } else {
-                await runStackFrom(blocks, edges, svgInfoByType, headFalse, haltRef);
+                await runStackFrom(blocks, edges, headFalse, haltRef);
             }
             await sleep(stepDelayMs);
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
 
-        // REPEAT UNTIL
+        // REPEAT UNTIL (body wired on "false" arm)
         if (b.type === "repeat_until") {
-            // body is wired on "false" arm
-            const bodyHead = branchHead(edges, b.id, "false");
+            const bodyHead = edges.find((e) => e.kind === "branch" && e.from === b.id && e.meta?.branch === "false")?.to || null;
             let guard = 2000;
             while (!haltRef.current && guard-- > 0) {
-                const done =
-                    (await evalPort(blocks, edges, svgInfoByType, b.id, "until")) ?? false;
+                const done = (await evalPort(blocks, edges, null, b.id, "until")) ?? false;
                 if (done) break;
-                await runStackFrom(blocks, edges, svgInfoByType, bodyHead, haltRef);
+                await runStackFrom(blocks, edges, bodyHead, haltRef);
                 await sleep(stepDelayMs);
             }
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
 
         // Operators (top-level): evaluate and log
         if (String(b.type).endsWith("_operator") || b.type === "variable") {
-            const v = await evalReporter(blocks, edges, svgInfoByType, b.id);
+            // Evaluate to demonstrate; typically these are reporters, not top-level commands
+            const v = await evalReporter(blocks, edges, b.id);
             appendLog(`>> ${b.type}: ${String(v)}`);
             await sleep(stepDelayMs);
-            return nextOf(edges, b.id);
+            api.setExecutingId?.(null);
+            return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
         }
 
         // Default: just move forward in the stack
-        return nextOf(edges, b.id);
+        api.setExecutingId?.(null);
+        return edges.find((e) => e.kind === "stack" && e.from === b.id)?.to || null;
     }
 
     // ---------- runner entry ----------
@@ -323,14 +329,14 @@ export default function RunnerPanel() {
         if (running) return;
         setRunning(true);
         try {
-            const { blocks, edges, svgInfoByType, variables } = getStoreSnapshot();
+            const { blocks, edges, variables } = getStoreSnapshot();
 
             // re-init runtime vars to 0 for declared variables
             runtimeVarsRef.current = Object.create(null);
             for (const v of variables || []) runtimeVarsRef.current[v.name] = 0;
 
             // find entry
-            const startId = findStart(blocks);
+            const startId = blocks.find((b) => b.type === "start")?.id || null;
             if (!startId) {
                 appendLog(">> No 'start' block found.");
                 setRunning(false);
@@ -338,16 +344,18 @@ export default function RunnerPanel() {
             }
 
             const haltRef = { current: false };
-            let cur = nextOf(edges, startId);
+            let cur = edges.find((e) => e.kind === "stack" && e.from === startId)?.to || null;
             let safety = 5000; // overall loop guard
 
             while (cur && !haltRef.current && safety-- > 0) {
-                cur = await execSingle(blocks, edges, svgInfoByType, cur, haltRef);
+                cur = await execSingle(blocks, edges, cur, haltRef);
             }
         } catch (err) {
             console.error(err);
             appendLog(`!! Runtime error: ${err?.message ?? String(err)}`);
         } finally {
+            // clear highlight at end
+            try { useBlockStore.getState().setExecutingId?.(null); } catch { }
             setRunning(false);
         }
     }
