@@ -3,10 +3,19 @@ import React from "react";
 import { useBlockStore } from "../store/useBlockStore";
 import { getAssetUrl, getMenuAssetUrl, CATEGORY_BY_TYPE } from "../bootstrap/loadSvgInfo";
 
-/** ── TWEAK HERE ─────────────────────────────────────────────── */
-const PALETTE_WIDTH = 220;   // overall left panel width (also controlled by App.jsx grid)
-const TILE_HEIGHT = 84;      // regular tile height (was 56)
-const VAR_TILE_HEIGHT = 90;  // variable tile height (was 60)
+/** ── TWEAKS ─────────────────────────────────────────────────── */
+const PALETTE_WIDTH = 220;           // Left panel width (matches App.jsx grid if you set it there)
+const TILE_HEIGHT = 120;              // Default tile height
+const VAR_TILE_HEIGHT = 90;          // Variable reporter tile height
+const LABEL_BAR_HEIGHT = 22;         // Reserved space at bottom for label
+const TILE_PADDING = 8;              // Inner padding around the preview image
+
+// Custom heights for tall/complex palette previews
+const TILE_HEIGHT_BY_TYPE = {
+    if_else: 200,
+    repeat_until: 250,
+    repeat_times: 250,
+};
 /** ───────────────────────────────────────────────────────────── */
 
 function uid(prefix = "") {
@@ -241,15 +250,31 @@ function TileColumn({ items, onAdd }) {
     );
 }
 
-function Tile({ type, onClick, label }) {
+function prettyLabelFromType(type) {
+    // Convert "repeat_until_menu" -> "repeat until"
+    // Remove trailing "_menu" if present, then replace underscores with spaces
+    const trimmed = type.endsWith("_menu") ? type.slice(0, -5) : type;
+    return trimmed.replaceAll("_", " ");
+}
+
+function Tile({ type, onClick }) {
     const url = getMenuAssetUrl(type);
+    const label = prettyLabelFromType(type);
+    const tileHeight = TILE_HEIGHT_BY_TYPE[type] ?? TILE_HEIGHT;
+
+    // Reserve space for the label; image fills the remaining area with padding
+    const imageBoxTop = TILE_PADDING;
+    const imageBoxLeft = TILE_PADDING;
+    const imageBoxRight = TILE_PADDING;
+    const imageBoxBottom = LABEL_BAR_HEIGHT + TILE_PADDING;
+
     return (
         <button
             onClick={onClick}
-            title={label || type}
+            title={label}
             style={{
                 width: "100%",
-                height: TILE_HEIGHT,       // <── tweak with TILE_HEIGHT
+                height: tileHeight,
                 padding: 0,
                 border: "1px solid #2b2b2b",
                 borderRadius: 10,
@@ -259,30 +284,52 @@ function Tile({ type, onClick, label }) {
                 overflow: "hidden",
             }}
         >
+            {/* Preview image area */}
             <img
                 src={url}
                 alt={type}
                 style={{
-                    width: "100%",
-                    height: "100%",
+                    position: "absolute",
+                    left: imageBoxLeft,
+                    right: imageBoxRight,
+                    top: imageBoxTop,
+                    bottom: imageBoxBottom,
+                    width: "auto",
+                    height: "auto",
+                    maxWidth: `calc(100% - ${imageBoxLeft + imageBoxRight}px)`,
+                    maxHeight: `calc(100% - ${imageBoxTop + imageBoxBottom}px)`,
                     objectFit: "contain",
                     display: "block",
+                    margin: "auto",
                 }}
             />
-            {label && (
-                <div
-                    style={{
-                        position: "absolute",
-                        left: 8,
-                        top: 8,
-                        fontSize: 11,
-                        color: "#bbb",
-                        pointerEvents: "none",
-                    }}
-                >
-                    {label}
-                </div>
-            )}
+
+            {/* Bottom label bar */}
+            <div
+                style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: LABEL_BAR_HEIGHT,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "#cfcfcf",
+                    background: "rgba(0,0,0,0.18)",
+                    borderTop: "1px solid #222",
+                    pointerEvents: "none",
+                    padding: "0 6px",
+                    textTransform: "none",
+                    whiteSpace: "nowrap",
+                    textOverflow: "ellipsis",
+                    overflow: "hidden",
+                }}
+            >
+                {label}
+            </div>
         </button>
     );
 }
@@ -295,7 +342,7 @@ function VariableTile({ varName, onClick }) {
             title={varName}
             style={{
                 width: "100%",
-                height: VAR_TILE_HEIGHT,   // <── tweak with VAR_TILE_HEIGHT
+                height: VAR_TILE_HEIGHT,
                 padding: 0,
                 border: "1px solid #2b2b2b",
                 borderRadius: 10,
@@ -305,23 +352,48 @@ function VariableTile({ varName, onClick }) {
                 overflow: "hidden",
             }}
         >
+            {/* Preview image area — also reserve space for the text overlay */}
             <img
                 src={url}
                 alt={varName}
-                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                style={{
+                    position: "absolute",
+                    left: TILE_PADDING,
+                    right: TILE_PADDING,
+                    top: TILE_PADDING,
+                    bottom: LABEL_BAR_HEIGHT + TILE_PADDING,
+                    width: "auto",
+                    height: "auto",
+                    maxWidth: `calc(100% - ${TILE_PADDING * 2}px)`,
+                    maxHeight: `calc(100% - ${TILE_PADDING * 2 + LABEL_BAR_HEIGHT}px)`,
+                    objectFit: "contain",
+                    display: "block",
+                    margin: "auto",
+                }}
             />
+            {/* Bottom label bar with variable name */}
             <div
                 style={{
                     position: "absolute",
-                    left: 10,
-                    right: 10,
-                    top: 16,
-                    textAlign: "center",
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: LABEL_BAR_HEIGHT,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                     fontSize: 12,
                     fontWeight: 700,
-                    color: "white",
-                    textShadow: "0 1px 0 rgba(0,0,0,0.35)",
+                    color: "#ffffff",
+                    background: "rgba(0,0,0,0.25)",
+                    borderTop: "1px solid #222",
                     pointerEvents: "none",
+                    padding: "0 6px",
+                    textTransform: "none",
+                    whiteSpace: "nowrap",
+                    textOverflow: "ellipsis",
+                    overflow: "hidden",
+                    textShadow: "0 1px 0 rgba(0,0,0,0.35)",
                 }}
             >
                 {varName}

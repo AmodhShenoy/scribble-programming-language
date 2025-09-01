@@ -41,7 +41,7 @@ export default function App() {
           background: "#fafafa",
         }}
       >
-        <h3 style={{ margin: "8px 0 12px 0" }}>Palette</h3>
+        <h3 style={{ margin: "8px 0 12px 0" }}>SCRIBBLE</h3>
         <BlockPalette />
       </aside>
 

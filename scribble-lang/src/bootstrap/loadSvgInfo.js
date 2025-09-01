@@ -93,7 +93,6 @@ export const CATEGORY_BY_TYPE = {
     // action
     say: "action",
     think: "action",
-    wait: "action",
     clear: "action",
 
     // motion
@@ -109,6 +108,7 @@ export const CATEGORY_BY_TYPE = {
     if_else: "control",
     repeat_until: "control",
     repeat_times: "control",
+    wait: "control",
 
     // variables
     set_variable: "variable",
