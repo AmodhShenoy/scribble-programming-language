@@ -5,8 +5,8 @@ import { useBlockStore } from "../store/useBlockStore";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** ── Config (edit these values as you like) ────────────────────────────── */
-const EXEC_DELAY_MS = 3000;   // delay between executed blocks (ms)
-const STEP_SCALE = 10;       // 1 "step" = 10 px (screen distance)
+const EXEC_DELAY_MS = 300;   // delay between executed blocks (ms)
+const STEP_SCALE = 20;       // 1 "step" = 10 px (screen distance)
 /** ─────────────────────────────────────────────────────────────────────── */
 
 export default function RunnerPanel() {
@@ -84,6 +84,23 @@ export default function RunnerPanel() {
         const n = Number(val);
         return Number.isFinite(n) && String(val).trim() !== "" ? n : String(val);
     }
+    // Helpers for reporter coercion
+    const isNumericLike = (v) => {
+        const s = String(v).trim();
+        if (s === "") return false;
+        const n = Number(s);
+        return Number.isFinite(n);
+    };
+
+    const toNumberOrNull = (v) => (isNumericLike(v) ? Number(v) : null);
+
+    // Always-positive modulo (handles negatives):
+    const posMod = (a, b) => {
+        if (b === 0) return 0;
+        const r = a % b;
+        return (r + b) % b;
+    };
+
 
     async function evalReporter(blocks, edges, id) {
         const b = blockById(blocks, id);
@@ -107,16 +124,23 @@ export default function RunnerPanel() {
             "mod_operator",
         ]);
         if (math2.has(b.type)) {
-            const a = Number(await evalPort(blocks, edges, null, id, "a") ?? 0);
-            const c = Number(await evalPort(blocks, edges, null, id, "b") ?? 0);
+            const av = await evalPort(blocks, edges, null, id, "a");
+            const bv = await evalPort(blocks, edges, null, id, "b");
+
+            const A = toNumberOrNull(av) ?? 0;
+            const B = toNumberOrNull(bv) ?? 0;
+
+            let out = 0;
             switch (b.type) {
-                case "plus_operator": return a + c;
-                case "minus_operator": return a - c;
-                case "multiply_operator": return a * c;
-                case "divide_operator": return c === 0 ? 0 : a / c;
-                case "mod_operator": return c === 0 ? 0 : a % c;
-                default: return 0;
+                case "plus_operator": out = A + B; break;
+                case "minus_operator": out = A - B; break;
+                case "multiply_operator": out = A * B; break;
+                case "divide_operator": out = B === 0 ? 0 : A / B; break;
+                case "mod_operator": out = posMod(A, B); break;
+                default: out = 0;
             }
+            console.log(`[runner:math2] ${b.type} a=${A} b=${B} -> ${out}`);
+            return out;
         }
 
         // binary comparisons
@@ -128,27 +152,54 @@ export default function RunnerPanel() {
             "et_operator", // equals
         ]);
         if (cmp2.has(b.type)) {
-            const a = await evalPort(blocks, edges, null, id, "a");
-            const c = await evalPort(blocks, edges, null, id, "b");
+            const av = await evalPort(blocks, edges, null, id, "a");
+            const bv = await evalPort(blocks, edges, null, id, "b");
+
+            // If both numeric-like, compare numerically; otherwise compare as strings.
+            const aNum = toNumberOrNull(av);
+            const bNum = toNumberOrNull(bv);
+
+            let out = false;
             switch (b.type) {
-                case "gt_operator": return Number(a) > Number(c);
-                case "gte_operator": return Number(a) >= Number(c);
-                case "lt_operator": return Number(a) < Number(c);
-                case "lte_operator": return Number(a) <= Number(c);
-                case "et_operator": return a == c; // loose equality
-                default: return false;
+                case "gt_operator":
+                    out = Number(av) > Number(bv);
+                    break;
+                case "gte_operator":
+                    out = Number(av) >= Number(bv);
+                    break;
+                case "lt_operator":
+                    out = Number(av) < Number(bv);
+                    break;
+                case "lte_operator":
+                    out = Number(av) <= Number(bv);
+                    break;
+                case "et_operator":
+                    if (aNum !== null && bNum !== null) {
+                        out = aNum === bNum; // numeric equals
+                    } else {
+                        out = String(av) === String(bv); // string equals (strict)
+                    }
+                    break;
+                default:
+                    out = false;
             }
+            console.log(`[runner:cmp2] ${b.type} a=${av} b=${bv} -> ${out}`);
+            return out;
         }
 
         // logical
         if (b.type === "and_operator" || b.type === "or_operator") {
             const a = Boolean(await evalPort(blocks, edges, null, id, "a"));
             const c = Boolean(await evalPort(blocks, edges, null, id, "b"));
-            return b.type === "and_operator" ? a && c : a || c;
+            const out = b.type === "and_operator" ? a && c : a || c;
+            console.log(`[runner:logic] ${b.type} a=${a} b=${c} -> ${out}`);
+            return out;
         }
         if (b.type === "not_operator") {
             const a = Boolean(await evalPort(blocks, edges, null, id, "a"));
-            return !a;
+            const out = !a;
+            console.log(`[runner:logic] not a=${a} -> ${out}`);
+            return out;
         }
 
         // fallback: typed value
@@ -167,24 +218,28 @@ export default function RunnerPanel() {
         [appendLog]
     );
 
-    const cmdMove = React.useCallback(
-        async (distance) => {
-            const dist = (Number(distance) || 0) * STEP_SCALE;
-            const rad = (-sprite.dir) * (Math.PI / 180); // anticlockwise-positive math angle
+    const cmdMove = React.useCallback(async (distance) => {
+        const dist = (Number(distance) || 0) * STEP_SCALE;
+
+        setSprite((s) => {
+            // use the up-to-date direction 's.dir' here
+            const rad = (-s.dir) * (Math.PI / 180); // anticlockwise-positive math angle
             const dx = dist * Math.cos(rad);
             const dy = dist * Math.sin(rad);
 
-            setSprite((s) => {
-                const spriteSize = 64;
-                const maxX = Math.max(0, stageSize.w - spriteSize);
-                const maxY = Math.max(0, stageSize.h - spriteSize);
-                const nx = Math.max(0, Math.min(maxX, s.x + dx));
-                const ny = Math.max(0, Math.min(maxY, s.y + dy));
-                return { ...s, x: nx, y: ny };
-            });
-        },
-        [sprite.dir, stageSize.w, stageSize.h]
-    );
+            const spriteSize = 64;
+            const maxX = Math.max(0, stageSize.w - spriteSize);
+            const maxY = Math.max(0, stageSize.h - spriteSize);
+
+            const nx = Math.max(0, Math.min(maxX, s.x + dx));
+            const ny = Math.max(0, Math.min(maxY, s.y + dy));
+
+            // optional debug:
+            console.log("[runner] MOVE", { dist, dir: s.dir, dx, dy, nx, ny });
+
+            return { ...s, x: nx, y: ny };
+        });
+    }, [stageSize.w, stageSize.h]);
 
     const cmdTurnACW = React.useCallback(async (deg) => {
         const d = Number(deg) || 0;

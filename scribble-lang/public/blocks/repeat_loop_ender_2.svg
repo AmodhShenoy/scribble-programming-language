@@ -1,27 +1,27 @@
-<svg width="289" height="207" viewBox="0 0 289 207" fill="none" xmlns="http://www.w3.org/2000/svg">
-<g id="repeat_loop_ender_1">
+<svg width="254" height="310" viewBox="0 0 254 310" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="repeat_loop_ender_2">
 <g id="loop_back_bottom">
-<path id="true_connector_vert" d="M269 156H247V182H269V156Z" fill="#F0B43B"/>
+<path id="Vector" d="M35 288V310H240V288H35Z" fill="#F0B43B"/>
+<path id="true_connector_vert" d="M240 262H218V288H240V262Z" fill="#F0B43B"/>
 <g id="loop_ender_connector">
 <g id="capTop">
-<path d="M258 132H233V107L258 132Z" fill="#F0B43B"/>
-<path d="M283 132H258L283 107V132Z" fill="#F0B43B"/>
+<path d="M229 238H204V213L229 238Z" fill="#F0B43B"/>
+<path d="M254 238H229L254 213V238Z" fill="#F0B43B"/>
 </g>
-<rect id="Rectangle 2" x="233" y="132" width="50" height="24" fill="#F0B43B"/>
-<path id="stripe" d="M283 112L258 137L233 112V107L258 132L283 107V112Z" fill="white"/>
-<circle id="anchor:false-in" opacity="0.01" cx="258" cy="132" r="1" fill="#D9D9D9"/>
+<rect id="Rectangle 2" x="204" y="238" width="50" height="24" fill="#F0B43B"/>
+<path id="stripe" d="M254 218L229 243L204 218V213L229 238L254 213V218Z" fill="white"/>
+<circle id="anchor:false-in" opacity="0.01" cx="229" cy="238" r="1" fill="#D9D9D9"/>
 </g>
-<path id="Vector" d="M13 182V204H269V182H13Z" fill="#F0B43B"/>
 </g>
 <g id="loop_back_arrow">
-<path id="loop_back_arrowbody" d="M35 182H13V24H35V182Z" fill="#F0B43B"/>
+<path id="loop_back_arrowbody" d="M35 310H13V24H35V310Z" fill="#F0B43B"/>
 <g id="border">
-<path d="M25.0001 0L0 25L50 25L25.0001 0Z" fill="#A87C2D"/>
-<path d="M25.0001 5L5 25L45 25L25.0001 5Z" fill="#A87C2D"/>
+<path d="M25.0001 -0.00011301L0 24.8838L50 24.8838L25.0001 -0.00011301Z" fill="#A87C2D"/>
+<path d="M25.0001 4.97667L5 24.8838L45 24.8838L25.0001 4.97667Z" fill="#A87C2D"/>
 </g>
 <g id="tip">
-<path d="M25.0001 5L5 25L45 25L25.0001 5Z" fill="#F0B43B"/>
-<path d="M25.0001 9L9 25L41 25L25.0001 9Z" fill="#F0B43B"/>
+<path d="M25.0002 4.95348L5.0466 24.907L44.9536 24.907L25.0002 4.95348Z" fill="#F0B43B"/>
+<path d="M25.0002 8.94418L9.0373 24.907L40.9629 24.907L25.0002 8.94418Z" fill="#F0B43B"/>
 </g>
 </g>
 </g>
